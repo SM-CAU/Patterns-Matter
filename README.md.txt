@@ -1,15 +1,34 @@
-# Patterns Matter Data Portal
+🚀 Key Skills Demonstrated
+Relational Database Management Systems (RDBMS)
+Designing relational data models: Used SQLite with tables for datasets and music clips.
 
-This is a Flask web portal for materials science datasets and original music clips, developed by Sayeed.
+Normalizing data: Structured uploads by property/tab, logging all uploads (with filename, property, tab, upload date, etc.).
 
-## Features
+CRUD operations: Created, read, updated, and deleted records using SQL and Python.
 
-- Materials datasets (bandgap, formation energy, melting point, oxidation state)
-- Music & guitar clip upload, preview, and download
-- Admin dashboard with file management
-- Search datasets and clips by keyword
-- SQL query tool (admin)
-- Supports inline edit and file delete (admin)
+Foreign keys (conceptual): Related dataset files to material properties, and music clips to metadata.
+
+SQL querying: Built custom queries, a SQL query tool, and explored database introspection (SELECT name FROM sqlite_master).
+
+Web Development (Full Stack)
+Backend: Flask routes, session management, file upload/download, dynamic rendering with Jinja2 templates.
+
+Frontend: HTML5 structure, CSS for layout/design, responsive tables, and forms for admin and user actions.
+
+RESTful patterns: Used logical URLs for resources (/clips, /materials/bandgap/dataset, etc.).
+
+Security: Used admin sessions, upload validation, and login/logout flows.
+
+Data Management & User Experience
+Search: Built a global search bar, retrieving results from SQL for both datasets and clips.
+
+File organization: Uploaded files stored in structured subfolders, linked in the database for easy lookup.
+
+Inline editing: Allowed admins to update dataset “source” and “description” directly in the web table.
+
+Robust error handling: Clear messages for missing files, bad uploads, or DB errors.
+
+Version control: Managed project with Git/GitHub.
 
 ## Quick Start
 
