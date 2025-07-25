@@ -1,5 +1,4 @@
-🚀 Key Skills Demonstrated
-Relational Database Management Systems (RDBMS)
+**Relational Database Management Systems (RDBMS):**
 Designing relational data models: Used SQLite with tables for datasets and music clips.
 
 Normalizing data: Structured uploads by property/tab, logging all uploads (with filename, property, tab, upload date, etc.).
@@ -10,7 +9,7 @@ Foreign keys (conceptual): Related dataset files to material properties, and mus
 
 SQL querying: Built custom queries, a SQL query tool, and explored database introspection (SELECT name FROM sqlite_master).
 
-Web Development (Full Stack)
+**Web Development (Full Stack):**
 Backend: Flask routes, session management, file upload/download, dynamic rendering with Jinja2 templates.
 
 Frontend: HTML5 structure, CSS for layout/design, responsive tables, and forms for admin and user actions.
@@ -19,7 +18,7 @@ RESTful patterns: Used logical URLs for resources (/clips, /materials/bandgap/da
 
 Security: Used admin sessions, upload validation, and login/logout flows.
 
-Data Management & User Experience
+**Data Management & User Experience:**
 Search: Built a global search bar, retrieving results from SQL for both datasets and clips.
 
 File organization: Uploaded files stored in structured subfolders, linked in the database for easy lookup.
