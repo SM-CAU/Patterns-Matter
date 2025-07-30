@@ -440,17 +440,15 @@ def public_clips():
 
         elif action == 'drive_link':
             link = request.form.get('link', '').strip()
-            media_type = request.form.get('media_type', 'audio')
             try:
                 file_id = extract_drive_id(link)
-                # Manually add extension to help with player detection
-                #ext = '.mp4' if media_type == 'video' else '.mp3'
-                db_filename = f"https://drive.google.com/file/d/{file_id}/preview"
-
+                # Save as preview|download (separated by ||)
+                preview_url = f"https://drive.google.com/file/d/{file_id}/preview"
+                download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+                db_filename = f"{preview_url}||{download_url}"
             except Exception as e:
                 message = f"Invalid Google Drive link. ({e})"
 
-        # Insert into DB
         if db_filename:
             try:
                 with sqlite3.connect(DB_NAME) as conn:

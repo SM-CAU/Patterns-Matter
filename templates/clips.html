@@ -75,7 +75,6 @@
         </div>
 
         <div class="upload-form" style="margin-bottom:2em;">
-            
             <h3>Add a Clip from Google Drive</h3>
             <form action="{{ url_for('public_clips') }}" method="post">
                 <input type="hidden" name="action" value="drive_link">
@@ -91,7 +90,6 @@
                 </p>
                 <p><button type="submit">Add Drive Content</button></p>
             </form>
-
         </div>
 
         {% if message %}
@@ -102,38 +100,39 @@
         {% if clips and clips|length > 0 %}
             {% for id, filename, title, description in clips %}
                 {% set is_drive = 'drive.google.com' in filename %}
-                {% set is_video = filename.endswith('.mp4') or filename.endswith('.webm') or filename.endswith('.mov') %}
-                {% set is_audio = filename.endswith('.mp3') or filename.endswith('.wav') or filename.endswith('.m4a') or filename.endswith('.ogg') %}
+                {% set is_split = '||' in filename %}
+                {% if is_split %}
+                    {% set preview_url = filename.split('||')[0] %}
+                    {% set download_url = filename.split('||')[1] %}
+                {% else %}
+                    {% set preview_url = url_for('uploaded_file', filename=filename) %}
+                    {% set download_url = url_for('uploaded_file', filename=filename) %}
+                {% endif %}
+
                 <div class="section">
                     <b>{{ title }}</b><br>
                     <small>{{ description }}</small><br>
-                    
+
                     {% if is_drive %}
-                        <iframe src="{{ filename }}" width="380" height="240" allow="autoplay" allowfullscreen style="margin-top:0.7em;"></iframe>
-                            <source src="{{ filename }}">
-                            Your browser does not support the video tag.
-                        </video>
-                    {% elif is_drive %}
-                        <audio controls style="margin-top:0.7em; width: 260px;">
-                            <source src="{{ filename }}">
-                            Your browser does not support the audio element.
-                        </audio>
-                    {% elif is_video %}
-                        <video controls width="380" style="margin-top:0.7em;">
-                            <source src="{{ url_for('uploaded_file', filename=filename) }}">
-                            Your browser does not support the video tag.
-                        </video>
-                    {% elif is_audio %}
-                        <audio controls style="margin-top:0.7em; width: 260px;">
-                            <source src="{{ url_for('uploaded_file', filename=filename) }}">
-                            Your browser does not support the audio element.
-                        </audio>
+                        <iframe src="{{ preview_url }}" width="380" height="240" allow="autoplay" allowfullscreen style="margin-top:0.7em;"></iframe>
                     {% else %}
-                        <span title="Unrecognized file type">{{ filename }}</span>
+                        {% set is_video = filename.endswith('.mp4') or filename.endswith('.webm') or filename.endswith('.mov') %}
+                        {% set is_audio = filename.endswith('.mp3') or filename.endswith('.wav') or filename.endswith('.m4a') or filename.endswith('.ogg') %}
+                        {% if is_video %}
+                            <video controls width="380" style="margin-top:0.7em;">
+                                <source src="{{ preview_url }}">
+                                Your browser does not support the video tag.
+                            </video>
+                        {% elif is_audio %}
+                            <audio controls style="margin-top:0.7em; width: 260px;">
+                                <source src="{{ preview_url }}">
+                                Your browser does not support the audio element.
+                            </audio>
+                        {% endif %}
                     {% endif %}
 
                     <br>
-                    <a href="{{ url_for('uploaded_file', filename=filename) if not is_drive else filename }}" download>Download</a>
+                    <a href="{{ download_url }}" target="_blank">Download</a>
                     {% if admin %}
                         <form action="{{ url_for('delete_clip', clip_id=id) }}" method="post" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete this clip?');">
                             <button type="submit" class="delete-btn">Delete</button>
