@@ -436,9 +436,13 @@ def public_clips():
             file.save(filepath)
             db_filename = 'clips/' + filename
         elif link:
+            media_type = request.form.get('media_type', 'audio')  # get file type from form (mp3 or mp4)
             try:
                 file_id = extract_drive_id(link)
-                db_filename = f"https://drive.google.com/uc?export=download&id={file_id}"
+                if media_type == 'video':
+                    db_filename = f"https://drive.google.com/uc?export=download&id={file_id}.mp4"
+                else:
+                    db_filename = f"https://drive.google.com/uc?export=download&id={file_id}.mp3"
             except:
                 message = "Invalid Google Drive link."
         else:
