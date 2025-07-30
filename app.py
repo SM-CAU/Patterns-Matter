@@ -442,7 +442,6 @@ def public_clips():
             link = request.form.get('link', '').strip()
             try:
                 file_id = extract_drive_id(link)
-                # Save as preview|download (separated by ||)
                 preview_url = f"https://drive.google.com/file/d/{file_id}/preview"
                 download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
                 db_filename = f"{preview_url}||{download_url}"
