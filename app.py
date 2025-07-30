@@ -393,6 +393,16 @@ def uploaded_file(filename):
         abort(404)
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
+@app.route('/view_result/<property_name>/<tab>/<path:filename>')
+def view_result_file(property_name, tab, filename):
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], property_name, tab, filename)
+    if not os.path.isfile(filepath):
+        return "File not found.", 404
+
+    ext = filename.rsplit('.', 1)[-1].lower()
+    return render_template("view_result.html", filename=filename, property_name=property_name, tab=tab, ext=ext)
+
+
 
 @app.route('/clips', methods=['GET', 'POST'])
 def public_clips():
