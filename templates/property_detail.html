@@ -185,8 +185,9 @@
                             <a href="{{ url_for('view_result_file', property_name=property_name, tab=tab, filename=fname) }}" target="_blank">View</a>
                         {% endif %}
                             <a href="{{ url_for('uploaded_file', filename=property_name + '/' + tab + '/' + fname) }}" download>Download</a>
+
                         {% if admin %}
-                             <form action="{{ url_for('delete_dataset_file', property_name=property_name, tab=tab, filename=fname) }}" method="post" style="display:inline;" onsubmit="return confirm('Delete this file?');">
+                            <form action="{{ url_for('delete_dataset_file', property_name=property_name, tab=tab, filename=fname) }}" method="post" style="display:inline;" onsubmit="return confirm('Delete this file?');">
                                 <button type="submit" class="delete-btn">Delete</button>
                             </form>
                         {% endif %}
