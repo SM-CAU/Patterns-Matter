@@ -331,11 +331,11 @@ def property_detail(property_name, tab):
             ORDER BY uploaded_at DESC
         """, (property_name, tab))
         uploads = c.fetchall()
-    uploads = [
-        (fname, source, description, uploaded_at)
-        for (fname, source, description, uploaded_at) in uploads
-        if os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], property_name, tab, fname))
-    ]
+    # uploads = [
+    #     (fname, source, description, uploaded_at)
+    #     for (fname, source, description, uploaded_at) in uploads
+    #     if os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], property_name, tab, fname))
+    # ]
 
     return render_template(
         'property_detail.html',
