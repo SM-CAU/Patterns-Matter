@@ -6,6 +6,7 @@ import numpy as np
 import sqlite3
 from werkzeug.utils import secure_filename
 import datetime
+import re
 
 # ========== SETTINGS ==========
 UPLOAD_FOLDER = 'uploads'
@@ -403,28 +404,48 @@ def view_result_file(property_name, tab, filename):
     return render_template("view_result.html", filename=filename, property_name=property_name, tab=tab, ext=ext)
 
 
+def extract_drive_id(link):
+    match = re.search(r'/d/([a-zA-Z0-9_-]+)', link)
+    if match:
+        return match.group(1)
+    match = re.search(r'id=([a-zA-Z0-9_-]+)', link)
+    if match:
+        return match.group(1)
+    raise ValueError("Invalid Drive link")
 
 @app.route('/clips', methods=['GET', 'POST'])
 def public_clips():
     admin = session.get('admin', False)
     message = ""
-    # Handle upload if admin and POST
+
+    # Handle upload or link if admin and POST
     if admin and request.method == 'POST':
         file = request.files.get('file')
+        link = request.form.get('link', '').strip()
         title = request.form.get('title', '').strip()
         description = request.form.get('description', '').strip()
-        if not file or not allowed_music_file(file.filename):
-            message = "Please upload a valid music or video file."
-        elif not title:
+        db_filename = None
+
+        if not title:
             message = "Title is required."
-        else:
+        elif file and allowed_music_file(file.filename):
             filename = secure_filename(file.filename)
             upload_folder = os.path.join(app.config['UPLOAD_FOLDER'], 'clips')
             os.makedirs(upload_folder, exist_ok=True)
             filepath = os.path.join(upload_folder, filename)
             file.save(filepath)
-            # Store path as forward slash for web
             db_filename = 'clips/' + filename
+        elif link:
+            try:
+                file_id = extract_drive_id(link)
+                db_filename = f"https://drive.google.com/uc?export=download&id={file_id}"
+            except:
+                message = "Invalid Google Drive link."
+        else:
+            message = "Please upload a file or provide a valid Drive link."
+
+        # Save to DB if filename was set
+        if db_filename:
             try:
                 with sqlite3.connect(DB_NAME) as conn:
                     c = conn.cursor()
@@ -433,9 +454,23 @@ def public_clips():
                         (db_filename, title, description)
                     )
                     conn.commit()
-                message = "Clip uploaded!"
+                message = "Clip added!"
             except sqlite3.OperationalError:
                 message = "Database table not ready. Use SQL tool to create it first!"
+
+    # Get clips (or show empty list if table missing)
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            c = conn.cursor()
+            c.execute("SELECT id, filename, title, description FROM music_clips")
+            clips = [
+                (id, filename.replace('\\', '/'), title, description)
+                for (id, filename, title, description) in c.fetchall()
+            ]
+    except sqlite3.OperationalError:
+        clips = []
+
+    return render_template('clips.html', clips=clips, admin=admin, message=message)
 
     # Get clips (or show empty list if table missing)
     try:
