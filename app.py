@@ -31,6 +31,7 @@ def auto_import_uploads():
             table_name = filename.replace('.', '_').replace('-', '_').replace('/', '_').replace('\\', '_')
 
             try:
+                # Load data
                 if ext == 'csv':
                     df = pd.read_csv(filepath)
                 elif ext == 'npy':
@@ -43,13 +44,34 @@ def auto_import_uploads():
                         else:
                             df = pd.DataFrame(arr)
                     else:
-                        continue  # skip unsupported NPY format
+                        continue  # unsupported NPY format
                 else:
                     continue
 
+                # Write to SQLite
                 with sqlite3.connect(DB_NAME) as conn:
                     df.to_sql(table_name, conn, if_exists='replace', index=False)
-                print(f"Imported: {filename} → table '{table_name}'")
+
+                print(f"Imported: {filename} as table '{table_name}'")
+
+                # Auto-log into uploads_log if possible
+                rel_path = os.path.relpath(filepath, UPLOAD_FOLDER)
+                parts = rel_path.split(os.sep)
+
+                if len(parts) >= 3:
+                    property_name = parts[0]
+                    tab = parts[1]
+                    file_name = parts[2]
+                    with sqlite3.connect(DB_NAME) as conn:
+                        c = conn.cursor()
+                        c.execute("""
+                            INSERT OR IGNORE INTO uploads_log (property, tab, filename, uploaded_at)
+                            VALUES (?, ?, ?, ?)
+                        """, (property_name, tab, file_name, datetime.datetime.now().isoformat()))
+                        conn.commit()
+                        print(f"Logged {file_name} to uploads_log.")
+                else:
+                    print(f"Skipped logging for {filename} (not in expected folder structure).")
 
             except Exception as e:
                 print(f"Failed to import {filename}: {e}")
