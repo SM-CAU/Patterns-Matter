@@ -75,14 +75,23 @@
         </div>
 
         <div class="upload-form" style="margin-bottom:2em;">
+            
             <h3>Add a Clip from Google Drive</h3>
             <form action="{{ url_for('public_clips') }}" method="post">
                 <input type="hidden" name="action" value="drive_link">
                 <p><input type="text" name="title" placeholder="Title" required></p>
                 <p><input type="text" name="description" placeholder="Description"></p>
                 <p><input type="text" name="link" placeholder="Paste Google Drive Share Link Here" style="width: 100%;" required></p>
-                <p><button type="submit">Add Drive Clip</button></p>
+                <p>
+                    <label><strong>Type:</strong></label>
+                    <select name="media_type" required>
+                        <option value="audio">Audio (.mp3)</option>
+                        <option value="video">Video (.mp4)</option>
+                    </select>
+                </p>
+                <p><button type="submit">Add Drive Content</button></p>
             </form>
+
         </div>
 
         {% if message %}
