@@ -76,6 +76,40 @@ def auto_import_uploads():
             except Exception as e:
                 print(f"Failed to import {filename}: {e}")
 
+def auto_log_material_files():
+    if not os.path.exists(UPLOAD_FOLDER):
+        return
+
+    all_allowed_exts = ALLOWED_DATASET_EXTENSIONS | ALLOWED_RESULTS_EXTENSIONS | ALLOWED_MUSIC_EXTENSIONS
+
+    for root, dirs, files in os.walk(UPLOAD_FOLDER):
+        for filename in files:
+            ext = filename.rsplit('.', 1)[-1].lower()
+            if ext not in all_allowed_exts:
+                continue
+
+            filepath = os.path.join(root, filename)
+            rel_path = os.path.relpath(filepath, UPLOAD_FOLDER)
+            parts = rel_path.split(os.sep)
+
+            # Skip music uploads under /uploads/clips/
+            if parts[0] == 'clips':
+                continue
+
+            if len(parts) >= 3:
+                property_name = parts[0]
+                tab = parts[1]
+                file_name = parts[2]
+
+                with sqlite3.connect(DB_NAME) as conn:
+                    c = conn.cursor()
+                    c.execute("""
+                        INSERT OR IGNORE INTO uploads_log (property, tab, filename, uploaded_at)
+                        VALUES (?, ?, ?, ?)
+                    """, (property_name, tab, file_name, datetime.datetime.now().isoformat()))
+                    conn.commit()
+                    print(f"Auto-logged: {rel_path}")
+
 
 # ========== FLASK APP ==========
 app = Flask(__name__)
@@ -506,6 +540,8 @@ for rule in app.url_map.iter_rules():
     print(rule.endpoint, rule)
 
 auto_import_uploads()
+auto_log_material_files()
+
 
 # ========== MAIN ==========
 if __name__ == '__main__':
