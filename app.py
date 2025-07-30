@@ -16,6 +16,45 @@ ALLOWED_DATASET_EXTENSIONS = {'csv', 'npy'}
 ALLOWED_RESULTS_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'pdf', 'docx'}
 ALLOWED_MUSIC_EXTENSIONS = {'mp3', 'wav', 'm4a', 'ogg', 'mp4'}
 
+# Automation of import to sqlite3 database
+def auto_import_uploads():
+    if not os.path.exists(UPLOAD_FOLDER):
+        return
+
+    for root, dirs, files in os.walk(UPLOAD_FOLDER):
+        for filename in files:
+            ext = filename.rsplit('.', 1)[1].lower()
+            if ext not in ['csv', 'npy']:
+                continue
+
+            filepath = os.path.join(root, filename)
+            table_name = filename.replace('.', '_').replace('-', '_').replace('/', '_').replace('\\', '_')
+
+            try:
+                if ext == 'csv':
+                    df = pd.read_csv(filepath)
+                elif ext == 'npy':
+                    arr = np.load(filepath, allow_pickle=True)
+                    if isinstance(arr, np.ndarray):
+                        if arr.ndim == 2:
+                            df = pd.DataFrame(arr)
+                        elif arr.ndim == 1 and hasattr(arr[0], 'dtype') and arr[0].dtype.names:
+                            df = pd.DataFrame(arr)
+                        else:
+                            df = pd.DataFrame(arr)
+                    else:
+                        continue  # skip unsupported NPY format
+                else:
+                    continue
+
+                with sqlite3.connect(DB_NAME) as conn:
+                    df.to_sql(table_name, conn, if_exists='replace', index=False)
+                print(f"Imported: {filename} → table '{table_name}'")
+
+            except Exception as e:
+                print(f"Failed to import {filename}: {e}")
+
+
 # ========== FLASK APP ==========
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -443,6 +482,8 @@ def delete_dataset_file(property_name, tab, filename):
 # --- Print routes for debugging (optional, can comment out) ---
 for rule in app.url_map.iter_rules():
     print(rule.endpoint, rule)
+
+auto_import_uploads()
 
 # ========== MAIN ==========
 if __name__ == '__main__':
