@@ -34,12 +34,6 @@
             font-weight: bold;
         }
         .admin-link a:hover { text-decoration: underline; }
-        pre {
-            color: #faf070;
-            background: #222;
-            padding: 0.7em 1em;
-            border-radius: 7px;
-        }
         .delete-btn {
             background:#d33;
             color:#fff;
@@ -53,6 +47,22 @@
         .delete-btn:hover {
             background:#a22;
         }
+        .tab-buttons button {
+            padding: 0.5em 1.2em;
+            margin-right: 0.7em;
+            background: #333;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .tab-buttons button:hover {
+            background: #444;
+        }
+        .tab-content {
+            margin-top: 1em;
+        }
     </style>
 </head>
 <body>
@@ -65,33 +75,63 @@
                 <a href="{{ url_for('login') }}">Admin Login</a>
             {% endif %}
         </div>
+
         <h1>Music & Guitar Clips</h1>
-        
+
         {% if session.admin %}
-            <div class="upload-form" style="margin-bottom:2em;">
-                <form action="{{ url_for('public_clips') }}" method="post" enctype="multipart/form-data">
-                    <input type="file" name="file" required>
-                    <input type="text" name="title" placeholder="Title" required>
-                    <input type="text" name="description" placeholder="Description">
-                    <button type="submit">Upload Clip</button>
-                </form>
+            <div class="upload-form" style="margin-bottom: 2em;">
+                <div class="tab-buttons">
+                    <button onclick="showTab('uploadTab')" type="button">Upload File</button>
+                    <button onclick="showTab('driveTab')" type="button">Add from Google Drive</button>
+                </div>
+
                 {% if message %}
-                    <div style="color:green;">{{ message }}</div>
+                    <div style="color:green; margin-top: 1em;">{{ message }}</div>
                 {% endif %}
+
+                <div id="uploadTab" class="tab-content" style="display: block;">
+                    <h3>Upload a Music/Video File</h3>
+                    <form action="{{ url_for('public_clips') }}" method="post" enctype="multipart/form-data">
+                        <input type="hidden" name="action" value="upload_file">
+                        <p><input type="file" name="file" required></p>
+                        <p><input type="text" name="title" placeholder="Title" required></p>
+                        <p><input type="text" name="description" placeholder="Description"></p>
+                        <p><button type="submit">Upload Clip</button></p>
+                    </form>
+                </div>
+
+                <div id="driveTab" class="tab-content" style="display: none;">
+                    <h3>Add from Google Drive</h3>
+                    <form action="{{ url_for('public_clips') }}" method="post">
+                        <input type="hidden" name="action" value="drive_link">
+                        <p><input type="text" name="title" placeholder="Title" required></p>
+                        <p><input type="text" name="description" placeholder="Description"></p>
+                        <p><input type="text" name="link" placeholder="Paste Google Drive Share Link Here" style="width: 100%;" required></p>
+                        <p><button type="submit">Add Clip</button></p>
+                    </form>
+                </div>
+
+                <script>
+                    function showTab(tabId) {
+                        document.getElementById('uploadTab').style.display = 'none';
+                        document.getElementById('driveTab').style.display = 'none';
+                        document.getElementById(tabId).style.display = 'block';
+                    }
+                </script>
             </div>
         {% endif %}
-        
-        {# DEBUG: show the whole clips variable #}
-        {# <pre>DEBUG clips: {{ clips|safe }}</pre> #}
-        
+
         {% if clips and clips|length > 0 %}
             {% for id, filename, title, description in clips %}
-                {# DEBUG: print the filename used #}
-                {# <pre>DEBUG filename: {{ filename }}</pre> #}
                 <div class="section">
                     <b>{{ title }}</b><br>
                     <small>{{ description }}</small><br>
-                    {% if filename.endswith('.mp3') or filename.endswith('.wav') or filename.endswith('.m4a') or filename.endswith('.ogg') %}
+                    {% if 'drive.google.com' in filename %}
+                        <audio controls style="margin-top:0.7em; width: 260px;">
+                            <source src="{{ filename }}">
+                            Your browser does not support the audio element.
+                        </audio>
+                    {% elif filename.endswith('.mp3') or filename.endswith('.wav') or filename.endswith('.m4a') or filename.endswith('.ogg') %}
                         <audio controls style="margin-top:0.7em; width: 260px;">
                             <source src="{{ url_for('uploaded_file', filename=filename) }}">
                             Your browser does not support the audio element.
@@ -116,9 +156,9 @@
         {% else %}
             <p>No music clips uploaded yet. Please check back later!</p>
         {% endif %}
-        
+
         <div style="margin-top:2em;">
-            <a href="{{ url_for('public_home') }}">Home</a> | 
+            <a href="{{ url_for('public_home') }}">Home</a> |
             <a href="{{ url_for('materials_portal') }}">Materials Database</a>
         </div>
     </div>
