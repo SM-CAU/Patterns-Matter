@@ -444,8 +444,9 @@ def public_clips():
             try:
                 file_id = extract_drive_id(link)
                 # Manually add extension to help with player detection
-                ext = '.mp4' if media_type == 'video' else '.mp3'
-                db_filename = f"https://drive.google.com/uc?export=download&id={file_id}{ext}"
+                #ext = '.mp4' if media_type == 'video' else '.mp3'
+                db_filename = f"https://drive.google.com/file/d/{file_id}/preview"
+
             except Exception as e:
                 message = f"Invalid Google Drive link. ({e})"
 

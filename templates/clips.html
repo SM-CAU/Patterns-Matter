@@ -108,8 +108,8 @@
                     <b>{{ title }}</b><br>
                     <small>{{ description }}</small><br>
                     
-                    {% if is_drive and 'mp4' in filename %}
-                        <video controls width="380" style="margin-top:0.7em;">
+                    {% if is_drive %}
+                        <iframe src="{{ filename }}" width="380" height="240" allow="autoplay" allowfullscreen style="margin-top:0.7em;"></iframe>
                             <source src="{{ filename }}">
                             Your browser does not support the video tag.
                         </video>
