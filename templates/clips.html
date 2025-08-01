@@ -12,21 +12,6 @@
             box-shadow: 0 1px 6px #2224;
             color: #f1f1f1;
         }
-        .upload-form input[type="file"], .upload-form input[type="text"] {
-            margin: 0.7em 0.5em 0.7em 0;
-        }
-        .upload-form button[type="submit"] {
-            background: #2a6;
-            color: #fff;
-            border-radius: 6px;
-            padding: 0.4em 1.5em;
-            font-weight: bold;
-            border: none;
-            cursor: pointer;
-        }
-        .upload-form button[type="submit"]:hover {
-            background: #225c44;
-        }
         .admin-link a {
             color: #fff;
             text-decoration: none;
@@ -34,19 +19,6 @@
             font-weight: bold;
         }
         .admin-link a:hover { text-decoration: underline; }
-        .delete-btn {
-            background:#d33;
-            color:#fff;
-            border:none;
-            padding:0.3em 1em;
-            border-radius:6px;
-            margin-left:1em;
-            cursor:pointer;
-            font-weight: bold;
-        }
-        .delete-btn:hover {
-            background:#a22;
-        }
     </style>
 </head>
 <body>
@@ -62,86 +34,27 @@
 
         <h1>Music & Guitar Clips</h1>
 
-        {% if session.admin %}
-        <div class="upload-form" style="margin-bottom:2em;">
-            <h3>Upload a Music/Video File</h3>
-            <form action="{{ url_for('public_clips') }}" method="post" enctype="multipart/form-data">
-                <input type="hidden" name="action" value="upload_file">
-                <p><input type="file" name="file" required></p>
-                <p><input type="text" name="title" placeholder="Title" required></p>
-                <p><input type="text" name="description" placeholder="Description"></p>
-                <p><button type="submit">Upload Clip</button></p>
-            </form>
-        </div>
-
-        <div class="upload-form" style="margin-bottom:2em;">
-            <h3>Add a Clip from Google Drive</h3>
-            <form action="{{ url_for('public_clips') }}" method="post">
-                <input type="hidden" name="action" value="drive_link">
-                <p><input type="text" name="title" placeholder="Title" required></p>
-                <p><input type="text" name="description" placeholder="Description"></p>
-                <p><input type="text" name="link" placeholder="Paste Google Drive Share Link Here" style="width: 100%;" required></p>
-                <p>
-                    <label><strong>Type:</strong></label>
-                    <select name="media_type" required>
-                        <option value="audio">Audio (.mp3)</option>
-                        <option value="video">Video (.mp4)</option>
-                    </select>
-                </p>
-                <p><button type="submit">Add Drive Content</button></p>
-            </form>
-        </div>
-
-        {% if message %}
-            <div style="color:green;">{{ message }}</div>
+        {% if admin %}
+            <p style="margin-top: 1em;">
+                <a href="{{ url for ('add_drive_clip')}}" style="color: #6af; font-weight:bold;">
+                    ➕ Add Drive Clip via Form
+                </a> |
+            </p>
         {% endif %}
-        {% endif %}
+        
+        {% if clips %}
+            {% for preview, download, title, description in clips %}
+            <div class="section">
+                <b>{{ title }}</b><br>
+                <small>{{ description }}</small><br>
 
-        {% if clips and clips|length > 0 %}
-            {% for id, filename, title, description in clips %}
-                {% set is_drive = 'drive.google.com' in filename %}
-                {% set is_split = '||' in filename %}
-                {% if is_split %}
-                    {% set preview_url = filename.split('||')[0] %}
-                    {% set download_url = filename.split('||')[1] %}
-                {% else %}
-                    {% set preview_url = url_for('uploaded_file', filename=filename) %}
-                    {% set download_url = url_for('uploaded_file', filename=filename) %}
-                {% endif %}
-
-                <div class="section">
-                    <b>{{ title }}</b><br>
-                    <small>{{ description }}</small><br>
-
-                    {% if is_drive %}
-                        <iframe src="{{ preview_url }}" width="380" height="240" allow="autoplay" allowfullscreen style="margin-top:0.7em;"></iframe>
-                    {% else %}
-                        {% set is_video = filename.endswith('.mp4') or filename.endswith('.webm') or filename.endswith('.mov') %}
-                        {% set is_audio = filename.endswith('.mp3') or filename.endswith('.wav') or filename.endswith('.m4a') or filename.endswith('.ogg') %}
-                        {% if is_video %}
-                            <video controls width="380" style="margin-top:0.7em;">
-                                <source src="{{ preview_url }}">
-                                Your browser does not support the video tag.
-                            </video>
-                        {% elif is_audio %}
-                            <audio controls style="margin-top:0.7em; width: 260px;">
-                                <source src="{{ preview_url }}">
-                                Your browser does not support the audio element.
-                            </audio>
-                        {% endif %}
-                    {% endif %}
-
-                    <br>
-                    <a href="{{ download_url }}" target="_blank">Download</a>
-                    {% if admin %}
-                        <form action="{{ url_for('delete_clip', clip_id=id) }}" method="post" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete this clip?');">
-                            <button type="submit" class="delete-btn">Delete</button>
-                        </form>
-                    {% endif %}
-                </div>
+                <iframe src="{{ preview }}" width="380" height="240" allow="autoplay" allowfullscreen style="margin-top:0.7em;"></iframe>
+                <br>
+                <a href="{{ download }}" target="_blank">Download</a>
+            </div>
             {% endfor %}
         {% else %}
-            <p>No music clips uploaded yet. Please check back later!</p>
+            <p>No music clips listed in <code>drive_music.csv</code></p>
         {% endif %}
 
         <div style="margin-top:2em;">

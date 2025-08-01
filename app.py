@@ -7,7 +7,7 @@ import sqlite3
 from werkzeug.utils import secure_filename
 import datetime
 import re
-
+import csv
 # ========== SETTINGS ==========
 UPLOAD_FOLDER = 'uploads'
 DB_NAME = 'patterns-matter.db'
@@ -413,68 +413,26 @@ def extract_drive_id(link):
         return match.group(1)
     raise ValueError("Invalid Drive link")
 
-@app.route('/clips', methods=['GET', 'POST'])
+@app.route('/clips')
 def public_clips():
     admin = session.get('admin', False)
-    message = ""
-    db_filename = None
+    clips = []
 
-    if admin and request.method == 'POST':
-        action = request.form.get('action', '')
-        title = request.form.get('title', '').strip()
-        description = request.form.get('description', '').strip()
-
-        if not title:
-            message = "Title is required."
-        elif action == 'upload_file':
-            file = request.files.get('file')
-            if not file or not allowed_music_file(file.filename):
-                message = "Please upload a valid music or video file."
-            else:
-                filename = secure_filename(file.filename)
-                upload_folder = os.path.join(app.config['UPLOAD_FOLDER'], 'clips')
-                os.makedirs(upload_folder, exist_ok=True)
-                filepath = os.path.join(upload_folder, filename)
-                file.save(filepath)
-                db_filename = 'clips/' + filename
-
-        elif action == 'drive_link':
-            link = request.form.get('link', '').strip()
-            try:
-                file_id = extract_drive_id(link)
-                preview_url = f"https://drive.google.com/file/d/{file_id}/preview"
-                download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                db_filename = f"{preview_url}||{download_url}"
-            except Exception as e:
-                message = f"Invalid Google Drive link. ({e})"
-
-        if db_filename:
-            try:
-                with sqlite3.connect(DB_NAME) as conn:
-                    c = conn.cursor()
-                    c.execute(
-                        "INSERT INTO music_clips (filename, title, description) VALUES (?, ?, ?)",
-                        (db_filename, title, description)
-                    )
-                    conn.commit()
-                message = "Clip added!"
-            except Exception as e:
-                message = "Error saving to database: " + str(e)
-
-    # Fetch all clips
     try:
-        with sqlite3.connect(DB_NAME) as conn:
-            c = conn.cursor()
-            c.execute("SELECT id, filename, title, description FROM music_clips")
-            clips = [
-                (id, filename.replace('\\', '/'), title, description)
-                for (id, filename, title, description) in c.fetchall()
-            ]
-    except sqlite3.OperationalError:
+        with open('drive_music.csv', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                title = row.get('title', '').strip()
+                description = row.get('description', '').strip()
+                preview = row.get('preview_url', '').strip()
+                download = row.get('download_url', '').strip()
+                if preview and download:
+                    clips.append((preview, download, title, description))
+    except Exception as e:
+        print("Error reading drive_music.csv:", e)
         clips = []
 
-    return render_template('clips.html', clips=clips, admin=admin, message=message)
-
+    return render_template('clips.html', clips=clips, admin=admin)
 
 @app.route('/dataset/<table>')
 def public_view(table):
@@ -568,6 +526,42 @@ def delete_dataset_file(property_name, tab, filename):
         c.execute("DELETE FROM uploads_log WHERE property=? AND tab=? AND filename=?", (property_name, tab, safe_filename))
         conn.commit()
     return redirect(url_for('property_detail', property_name=property_name, tab=tab))
+
+@app.route('/add_drive_clip', methods=['GET', 'POST'])
+def add_drive_clip():
+    if not session.get('admin'):
+        return redirect(url_for('login'))
+
+    message = ""
+    if request.method == 'POST':
+        link = request.form.get('link', '').strip()
+        title = request.form.get('title', '').strip()
+        description = request.form.get('description', '').strip()
+
+        def extract_drive_id(link):
+            match = re.search(r'/d/([a-zA-Z0-9_-]+)', link)
+            if match:
+                return match.group(1)
+            match = re.search(r'id=([a-zA-Z0-9_-]+)', link)
+            if match:
+                return match.group(1)
+            return None
+
+        file_id = extract_drive_id(link)
+        if file_id and title:
+            preview_url = f"https://drive.google.com/file/d/{file_id}/preview"
+            download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+            try:
+                with open('drive_music.csv', 'a', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([title, description, preview_url, download_url])
+                message = "✅ Clip added successfully!"
+            except Exception as e:
+                message = f"❌ Error writing to CSV: {e}"
+        else:
+            message = "❌ Invalid link or missing title."
+
+    return render_template('add_drive_clip.html', message=message)
 
 # --- Print routes for debugging (optional, can comment out) ---
 for rule in app.url_map.iter_rules():
