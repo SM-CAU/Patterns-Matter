@@ -36,12 +36,12 @@
 
         {% if admin %}
             <p style="margin-top: 1em;">
-                <a href="{{ url for ('add_drive_clip')}}" style="color: #6af; font-weight:bold;">
+                <a href="{{ url_for ('add_drive_clip')}}" style="color: #6af; font-weight:bold;">
                     ➕ Add Drive Clip via Form
                 </a> |
             </p>
         {% endif %}
-        
+
         {% if clips %}
             {% for preview, download, title, description in clips %}
             <div class="section">
