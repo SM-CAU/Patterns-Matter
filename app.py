@@ -421,6 +421,12 @@ def public_clips():
     try:
         with open('drive_music.csv', encoding='utf-8') as f:
             reader = csv.DictReader(f)
+
+            # ✅ Safety check: ensure CSV has required headers
+            required_headers = {'title', 'description', 'preview_url', 'download_url'}
+            if not reader.fieldnames or not required_headers.issubset(set(reader.fieldnames)):
+                raise ValueError("Missing or invalid CSV header. Required headers: title, description, preview_url, download_url")
+
             for row in reader:
                 title = row.get('title', '').strip()
                 description = row.get('description', '').strip()
@@ -428,6 +434,7 @@ def public_clips():
                 download = row.get('download_url', '').strip()
                 if preview and download:
                     clips.append((preview, download, title, description))
+
     except Exception as e:
         print("Error reading drive_music.csv:", e)
         clips = []
