@@ -418,28 +418,35 @@ def public_clips():
     admin = session.get('admin', False)
     clips = []
 
+    # 1. Read from drive_music.csv
     try:
         with open('/data/drive_music.csv', encoding='utf-8') as f:
             reader = csv.DictReader(f)
-
-            # ✅ Safety check: ensure CSV has required headers
             required_headers = {'title', 'description', 'preview_url', 'download_url'}
-            if not reader.fieldnames or not required_headers.issubset(set(reader.fieldnames)):
-                raise ValueError("Missing or invalid CSV header. Required headers: title, description, preview_url, download_url")
-
-            for row in reader:
-                title = row.get('title', '').strip()
-                description = row.get('description', '').strip()
-                preview = row.get('preview_url', '').strip()
-                download = row.get('download_url', '').strip()
-                if preview and download:
-                    clips.append((preview, download, title, description))
-
+            if reader.fieldnames and required_headers.issubset(set(reader.fieldnames)):
+                for row in reader:
+                    title = row.get('title', '').strip()
+                    description = row.get('description', '').strip()
+                    preview = row.get('preview_url', '').strip()
+                    download = row.get('download_url', '').strip()
+                    if preview and download:
+                        clips.append((preview, download, title, description))
     except Exception as e:
         print("Error reading drive_music.csv:", e)
-        clips = []
+
+    # 2. Also read from music_clips table
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            c = conn.cursor()
+            c.execute("SELECT filename, title, description FROM music_clips ORDER BY id DESC")
+            for filename, title, description in c.fetchall():
+                url = url_for('uploaded_file', filename=filename)
+                clips.append((url, url, title, description))  # preview and download are the same
+    except Exception as e:
+        print("Error reading music_clips:", e)
 
     return render_template('clips.html', clips=clips, admin=admin)
+
 
 @app.route('/dataset/<table>')
 def public_view(table):
