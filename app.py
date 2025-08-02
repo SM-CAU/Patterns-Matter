@@ -419,7 +419,7 @@ def public_clips():
     clips = []
 
     try:
-        with open('drive_music.csv', encoding='utf-8') as f:
+        with open('/data/drive_music.csv', encoding='utf-8') as f:
             reader = csv.DictReader(f)
 
             # ✅ Safety check: ensure CSV has required headers
@@ -559,7 +559,7 @@ def add_drive_clip():
             preview_url = f"https://drive.google.com/file/d/{file_id}/preview"
             download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
             try:
-                with open('drive_music.csv', 'a', newline='', encoding='utf-8') as f:
+                with open('/data/drive_music.csv', 'a', newline='', encoding='utf-8') as f:
                     writer = csv.writer(f)
                     writer.writerow([title, description, preview_url, download_url])
                 message = "✅ Clip added successfully!"
