@@ -441,16 +441,8 @@ def public_clips():
     except Exception as e:
         print("🚫 Error reading CSV:", e)
 
-    # -- 2. Add any admin-uploaded clips stored in the database
-    try:
-        with sqlite3.connect(DB_NAME) as conn:
-            c = conn.cursor()
-            c.execute("SELECT filename, title, description FROM music_clips ORDER BY id DESC")
-            for filename, title, description in c.fetchall():
-                url = url_for('uploaded_file', filename=filename)
-                clips.append((url, url, title or '', description or ''))
-    except Exception as e:
-        print("🚫 Error reading from music_clips DB:", e)
+
+    pass
 
     return render_template('clips.html', clips=clips, admin=admin)
 
@@ -632,8 +624,6 @@ for rule in app.url_map.iter_rules():
 auto_import_uploads()
 auto_log_material_files()
 
-
 # ========== MAIN ==========
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
-    
