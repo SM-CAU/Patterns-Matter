@@ -415,12 +415,16 @@ def extract_drive_id(link):
 
 @app.route('/clips')
 def public_clips():
+    import os
+
     admin = session.get('admin', False)
     clips = []
 
-    # 1. Read from drive_music.csv
+    # -- 1. Try to load from CSV (Drive-backed music list)
+    csv_path = '/data/drive_music.csv' if os.path.exists('/data/drive_music.csv') else 'drive_music.csv'
+
     try:
-        with open('/data/drive_music.csv', encoding='utf-8') as f:
+        with open(csv_path, encoding='utf-8') as f:
             reader = csv.DictReader(f)
             required_headers = {'title', 'description', 'preview_url', 'download_url'}
             if reader.fieldnames and required_headers.issubset(set(reader.fieldnames)):
@@ -431,19 +435,21 @@ def public_clips():
                     download = row.get('download_url', '').strip()
                     if preview and download:
                         clips.append((preview, download, title, description))
+            else:
+                print("⚠️ CSV is missing required headers:", reader.fieldnames)
     except Exception as e:
-        print("Error reading drive_music.csv:", e)
+        print("🚫 Error reading CSV:", e)
 
-    # 2. Also read from music_clips table
+    # -- 2. Add any admin-uploaded clips stored in the database
     try:
         with sqlite3.connect(DB_NAME) as conn:
             c = conn.cursor()
             c.execute("SELECT filename, title, description FROM music_clips ORDER BY id DESC")
             for filename, title, description in c.fetchall():
                 url = url_for('uploaded_file', filename=filename)
-                clips.append((url, url, title, description))  # preview and download are the same
+                clips.append((url, url, title or '', description or ''))
     except Exception as e:
-        print("Error reading music_clips:", e)
+        print("🚫 Error reading from music_clips DB:", e)
 
     return render_template('clips.html', clips=clips, admin=admin)
 
