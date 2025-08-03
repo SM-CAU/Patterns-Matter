@@ -475,6 +475,42 @@ def download(table):
     df.to_csv(csv_path, index=False)
     return send_from_directory(UPLOAD_FOLDER, f"{table}.csv", as_attachment=True)
 
+@app.route('/migrate_csv_to_db')
+def migrate_csv_to_db():
+    if not session.get('admin'):
+        return "❌ Admin login required", 403
+
+    import os
+    csv_path = '/data/drive_music.csv' if os.path.exists('/data/drive_music.csv') else 'drive_music.csv'
+
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            c = conn.cursor()
+
+            # Step 1: Clear existing table
+            c.execute("DELETE FROM music_clips")
+
+            # Step 2: Re-read CSV and insert each entry
+            with open(csv_path, encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    title = row.get('title', '').strip()
+                    description = row.get('description', '').strip()
+                    preview = row.get('preview_url', '').strip()
+                    download = row.get('download_url', '').strip()
+                    if preview and download:
+                        db_value = f"{preview}||{download}"
+                        c.execute(
+                            "INSERT INTO music_clips (filename, title, description) VALUES (?, ?, ?)",
+                            (db_value, title, description)
+                        )
+
+            conn.commit()
+        return "✅ Database refreshed from CSV!"
+
+    except Exception as e:
+        return f"❌ Error during migration: {e}"
+
 # SEARCH ROUTE
 @app.route('/search')
 def search():
