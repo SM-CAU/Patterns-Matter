@@ -553,12 +553,16 @@ def add_drive_clip():
         description = request.form.get('description', '').strip()
 
         def extract_drive_id(link):
+            # Accept both full share URLs and raw file IDs
             match = re.search(r'/d/([a-zA-Z0-9_-]+)', link)
             if match:
                 return match.group(1)
             match = re.search(r'id=([a-zA-Z0-9_-]+)', link)
             if match:
                 return match.group(1)
+            # Fallback: raw ID
+            if re.match(r'^[a-zA-Z0-9_-]{10,}$', link):
+                return link
             return None
 
         file_id = extract_drive_id(link)
@@ -576,6 +580,7 @@ def add_drive_clip():
             message = "❌ Invalid link or missing title."
 
     return render_template('add_drive_clip.html', message=message)
+
 
 # --- Print routes for debugging (optional, can comment out) ---
 for rule in app.url_map.iter_rules():
