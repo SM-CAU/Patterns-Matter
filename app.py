@@ -479,10 +479,18 @@ def migrate_csv_to_db():
         with sqlite3.connect(DB_NAME) as conn:
             c = conn.cursor()
 
-            # Step 1: Clear existing table
-            c.execute("DELETE FROM music_clips")
+            # Step 1: Drop and recreate table
+            c.execute("DROP TABLE IF EXISTS music_clips")
+            c.execute('''
+                CREATE TABLE music_clips (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    filename TEXT,
+                    title TEXT,
+                    description TEXT
+                )
+            ''')
 
-            # Step 2: Re-read CSV and insert each entry
+            # Step 2: Insert from CSV
             with open(csv_path, encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
@@ -498,10 +506,9 @@ def migrate_csv_to_db():
                         )
 
             conn.commit()
-        return "✅ Database refreshed from CSV!"
-
+        return "✅ Table recreated and data loaded from CSV!"
     except Exception as e:
-        return f"❌ Error during migration: {e}"
+        return f"❌ Error: {e}"
 
 # SEARCH ROUTE
 @app.route('/search')
