@@ -421,7 +421,8 @@ def public_clips():
     clips = []
 
     # -- 1. Try to load from CSV (Drive-backed music list)
-    csv_path = '/data/drive_music.csv' if os.path.exists('/data/drive_music.csv') else 'drive_music.csv'
+    csv_path = '/data/drive_music.csv'
+    #csv_path = '/data/drive_music.csv' if os.path.exists('/data/drive_music.csv') else 'drive_music.csv'
 
     try:
         with open(csv_path, encoding='utf-8') as f:
