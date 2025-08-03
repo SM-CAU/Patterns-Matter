@@ -2,7 +2,7 @@
 <html>
 <head>
     <title>Music & Guitar Clips | Patterns Matter</title>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <style>
         .section {
             margin-bottom: 2.3em;
@@ -18,12 +18,24 @@
             margin-left: 1em;
             font-weight: bold;
         }
-        .admin-link a:hover { text-decoration: underline; }
+        .admin-link a:hover {
+            text-decoration: underline;
+        }
+        .download-link {
+            color: #6af;
+            font-weight: bold;
+        }
+        iframe {
+            margin-top: 0.7em;
+            width: 380px;
+            height: 240px;
+            border: none;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- Admin Login/Logout button -->
+        <!-- Admin Login/Logout -->
         <div class="admin-link" style="text-align: right; margin-bottom: 1em;">
             {% if session.admin %}
                 <a href="{{ url_for('logout') }}">Logout</a>
@@ -36,9 +48,9 @@
 
         {% if admin %}
             <p style="margin-top: 1em;">
-                <a href="{{ url_for ('add_drive_clip')}}" style="color: #6af; font-weight:bold;">
+                <a href="{{ url_for('add_drive_clip') }}" style="color: #6af; font-weight:bold;">
                     ➕ Add Drive Clip via Form
-                </a> |
+                </a>
             </p>
         {% endif %}
 
@@ -48,16 +60,20 @@
                 <b>{{ title }}</b><br>
                 <small>{{ description }}</small><br>
 
-                <iframe src="{{ preview }}" width="380" height="240" allow="autoplay" allowfullscreen style="margin-top:0.7em;"></iframe>
-                <br>
-                <a href="{{ download }}" target="_blank">Download</a>
+                {% if preview %}
+                    <iframe src="{{ preview }}" allow="autoplay" allowfullscreen></iframe>
+                {% endif %}
+
+                {% if download %}
+                    <br><a class="download-link" href="{{ download }}" target="_blank">Download</a>
+                {% endif %}
             </div>
             {% endfor %}
         {% else %}
             <p>No music clips listed in <code>drive_music.csv</code></p>
         {% endif %}
 
-        <div style="margin-top:2em;">
+        <div style="margin-top: 2em;">
             <a href="{{ url_for('public_home') }}">Home</a> |
             <a href="{{ url_for('materials_portal') }}">Materials Database</a>
         </div>
