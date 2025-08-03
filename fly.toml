@@ -6,6 +6,16 @@
 app = 'patterns-matter'
 primary_region = 'ams'
 
+[checks]
+  [checks.web]
+    grace_period = "10s"
+    interval = "15s"
+    method = "get"
+    path = "/"
+    timeout = "2s"
+    type = "http"
+
+
 [http_service]
   internal_port = 8080
   force_https = true
