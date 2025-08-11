@@ -118,9 +118,9 @@ def auto_log_material_files():
         c = conn.cursor()
         # Ensure uniqueness constraint exists
         c.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_uploads
-            ON uploads_log(property, tab, filename)
-        """)
+            INSERT OR IGNORE INTO uploads_log(property, tab, filename, logged_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            """, (property, tab, filename))
         conn.commit()
 
     for root, dirs, files in os.walk(UPLOAD_FOLDER):
@@ -669,7 +669,11 @@ for rule in app.url_map.iter_rules():
     print(rule.endpoint, rule)
 
 auto_import_uploads()
-auto_log_material_files()
+try:
+    auto_log_material_files()
+except Exception as e:
+    print("auto_log_material_files skipped:", e)
+
 
 # ========== MAIN ==========
 if __name__ == '__main__':
