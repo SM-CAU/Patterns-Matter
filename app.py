@@ -1,4 +1,5 @@
-# Test deploy via GitHub Actions
+# Test deploy via GitHub Actions. This app will temporarily run on a public IP.
+# It is a Flask web application that allows users to upload datasets, view results, and manage
 from flask import Flask, request, redirect, url_for, render_template, send_from_directory, flash, session, current_app, abort, jsonify
 import os
 import pandas as pd
