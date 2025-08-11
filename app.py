@@ -10,7 +10,7 @@ import re
 import csv
 # ========== SETTINGS ==========
 UPLOAD_FOLDER = 'uploads'
-DB_NAME = 'patterns-matter.db'
+DB_NAME = 'patterns-matter.db' # SQLite database file
 ADMIN_PASSWORD = 'IronMa1deN!'
 
 ALLOWED_DATASET_EXTENSIONS = {'csv', 'npy'}
