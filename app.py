@@ -426,11 +426,14 @@ def property_detail(property_name, tab):
                     # LOG THE UPLOAD!
                     with sqlite3.connect(DB_NAME) as conn:
                         c = conn.cursor()
-                        c.execute(
-                            "INSERT INTO uploads_log (property, tab, filename, uploaded_at) VALUES (?, ?, ?, ?)",
-                            (property_name, tab, filename, datetime.datetime.now().isoformat())
-                        )
+                        c.execute("""
+                            INSERT INTO uploads_log (property, tab, filename, uploaded_at)
+                            VALUES (?, ?, ?, ?)
+                            ON CONFLICT(property, tab, filename)
+                            DO UPDATE SET uploaded_at=excluded.uploaded_at
+                        """, (property_name, tab, filename, datetime.datetime.now().isoformat()))
                         conn.commit()
+
                     upload_message = f"File {filename} uploaded for {pretty_titles[property_name]} {tab.title()}!"
                 else:
                     upload_message = f"File type not allowed. Only {allowed_types} supported."
