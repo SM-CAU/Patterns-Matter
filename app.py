@@ -1,5 +1,5 @@
 # Test deploy via GitHub Actions
-from flask import Flask, request, redirect, url_for, render_template, send_from_directory, flash, session
+from flask import Flask, request, redirect, url_for, render_template, send_from_directory, flash, session, current_app, abort, jsonify
 import os
 import pandas as pd
 import numpy as np
@@ -108,48 +108,63 @@ def auto_import_uploads():
     print(f"auto_import_uploads: done, {imported} table(s) updated.")
     return imported
 
+# the  current auto_log_material_files() ---
+@app.before_first_request
+def _seed_uploads_log():
+    auto_log_material_files()
+
+
+def ensure_uploads_log_schema():
+    # Creates table if missing and enforces uniqueness on (property, tab, filename)
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS uploads_log (
+            property   TEXT NOT NULL,
+            tab        TEXT NOT NULL,
+            filename   TEXT NOT NULL
+        )
+        """)
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique ON uploads_log(property, tab, filename)")
+        conn.commit()
+
 def auto_log_material_files():
-    if not os.path.exists(UPLOAD_FOLDER):
+    ensure_uploads_log_schema()
+
+    upload_root = current_app.config.get("UPLOAD_FOLDER", UPLOAD_FOLDER)
+    if not os.path.exists(upload_root):
         return
 
     all_allowed_exts = ALLOWED_DATASET_EXTENSIONS | ALLOWED_RESULTS_EXTENSIONS
 
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        # Ensure uniqueness constraint exists
-        c.execute("""
-            INSERT OR IGNORE INTO uploads_log(property, tab, filename, logged_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            """, (property, tab, filename))
-        conn.commit()
-
-    for root, dirs, files in os.walk(UPLOAD_FOLDER):
-        for filename in files:
-            ext = filename.rsplit('.', 1)[-1].lower()
+    to_insert = []
+    for root, dirs, files in os.walk(upload_root):
+        for fname in files:
+            ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
             if ext not in all_allowed_exts:
                 continue
 
-            filepath = os.path.join(root, filename)
-            rel_path = os.path.relpath(filepath, UPLOAD_FOLDER)
+            fpath = os.path.join(root, fname)
+            rel_path = os.path.relpath(fpath, upload_root)
             parts = rel_path.split(os.sep)
 
             # Skip music uploads under /uploads/clips/
-            if parts[0] == 'clips':
+            if parts and parts[0] == "clips":
                 continue
 
             if len(parts) >= 3:
-                property_name = parts[0]
-                tab = parts[1]
-                file_name = parts[2]
+                property_name, tab, file_name = parts[0], parts[1], parts[2]
+                to_insert.append((property_name, tab, file_name))
 
-                with sqlite3.connect(DB_NAME) as conn:
-                    c = conn.cursor()
-                    c.execute("""
-                        INSERT OR IGNORE INTO uploads_log (property, tab, filename, uploaded_at)
-                        VALUES (?, ?, ?, ?)
-                    """, (property_name, tab, file_name, datetime.datetime.now().isoformat()))
-                    conn.commit()
-                    print(f"Auto-logged: {rel_path}")
+    if to_insert:
+        with sqlite3.connect(DB_NAME) as conn:
+            c = conn.cursor()
+            # idempotent insert: ignore duplicates quietly
+            c.executemany(
+                "INSERT OR IGNORE INTO uploads_log(property, tab, filename) VALUES (?, ?, ?)",
+                to_insert
+            )
+            conn.commit()
 
 
 # ========== FLASK APP ==========
@@ -423,8 +438,6 @@ def property_detail(property_name, tab):
     )
 
 
-from flask import abort
-
 @app.route('/uploads/<path:filename>')
 def uploaded_file(filename):
     full_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
@@ -611,16 +624,32 @@ from urllib.parse import unquote
 def delete_dataset_file(property_name, tab, filename):
     if not session.get('admin'):
         return redirect(url_for('login'))
-    safe_filename = secure_filename(os.path.basename(filename))
-    # Remove from disk
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], property_name, tab, safe_filename)
-    if os.path.isfile(file_path):
-        os.remove(file_path)
-    # Remove from DB
+
+    # Build and validate the target path
+    uploads_root = current_app.config.get("UPLOAD_FOLDER", UPLOAD_FOLDER)
+    base_dir = os.path.join(uploads_root, property_name, tab)
+    safe_name = secure_filename(os.path.basename(filename))
+    target_path = os.path.realpath(os.path.join(base_dir, safe_name))
+    base_dir_real = os.path.realpath(base_dir)
+    if not (target_path == base_dir_real or target_path.startswith(base_dir_real + os.sep)):
+        abort(400, description="Invalid file path")
+
+    # Remove file if present
+    try:
+        if os.path.isfile(target_path):
+            os.remove(target_path)
+    except Exception as e:
+        print(f"File delete warning: {e}")
+
+    # Remove exactly one row by composite key
     with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
-        c.execute("DELETE FROM uploads_log WHERE property=? AND tab=? AND filename=?", (property_name, tab, safe_filename))
+        c.execute(
+            "DELETE FROM uploads_log WHERE property=? AND tab=? AND filename=?",
+            (property_name, tab, safe_name)
+        )
         conn.commit()
+
     return redirect(url_for('property_detail', property_name=property_name, tab=tab))
 
 @app.route('/add_drive_clip', methods=['GET', 'POST'])
