@@ -19,69 +19,109 @@ ALLOWED_MUSIC_EXTENSIONS = {'mp3', 'wav', 'm4a', 'ogg', 'mp4'}
 
 # Automation of import to sqlite3 database
 def auto_import_uploads():
+    """
+    Import CSV/NPY datasets from uploads/<property>/<dataset>/ into SQLite tables.
+    - Skips music under uploads/clips/
+    - Does NOT write to uploads_log (logging handled elsewhere)
+    - Re-imports only when source file mtime changed (tracked in import_etag)
+    """
     if not os.path.exists(UPLOAD_FOLDER):
-        return
+        print("auto_import_uploads: uploads/ folder not found, skipping.")
+        return 0
 
-    for root, dirs, files in os.walk(UPLOAD_FOLDER):
-        for filename in files:
-            ext = filename.rsplit('.', 1)[1].lower()
-            if ext not in ['csv', 'npy']:
+    ALLOWED_IMPORT_EXTS = {'csv', 'npy'}
+    imported = 0
+
+    def tableize(name: str) -> str:
+        # Stable, safe table name from filename only (not full path)
+        # e.g. "bandgap.csv" -> "bandgap_csv"
+        t = name.replace('.', '_').replace('-', '_').replace(' ', '_')
+        return re.sub(r'[^0-9a-zA-Z_]', '_', t)
+
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        # Track file mtimes to avoid unnecessary re-imports
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS import_etag (
+                relpath TEXT PRIMARY KEY,
+                mtime REAL NOT NULL
+            )
+        """)
+        conn.commit()
+
+        for root, _, files in os.walk(UPLOAD_FOLDER):
+            # Skip music tree
+            rel_root = os.path.relpath(root, UPLOAD_FOLDER)
+            if rel_root.split(os.sep)[0] == 'clips':
                 continue
 
-            filepath = os.path.join(root, filename)
-            table_name = filename.replace('.', '_').replace('-', '_').replace('/', '_').replace('\\', '_')
-
-            try:
-                # Load data
-                if ext == 'csv':
-                    df = pd.read_csv(filepath)
-                elif ext == 'npy':
-                    arr = np.load(filepath, allow_pickle=True)
-                    if isinstance(arr, np.ndarray):
-                        if arr.ndim == 2:
-                            df = pd.DataFrame(arr)
-                        elif arr.ndim == 1 and hasattr(arr[0], 'dtype') and arr[0].dtype.names:
-                            df = pd.DataFrame(arr)
-                        else:
-                            df = pd.DataFrame(arr)
-                    else:
-                        continue  # unsupported NPY format
-                else:
+            for filename in files:
+                if filename.startswith('.'):
+                    continue
+                ext = filename.rsplit('.', 1)[-1].lower()
+                if ext not in ALLOWED_IMPORT_EXTS:
                     continue
 
-                # Write to SQLite
-                with sqlite3.connect(DB_NAME) as conn:
+                filepath = os.path.join(root, filename)
+                relpath = os.path.relpath(filepath, UPLOAD_FOLDER)
+                mtime = os.path.getmtime(filepath)
+                table_name = tableize(filename)
+
+                # Check etag (mtime)
+                c.execute("SELECT mtime FROM import_etag WHERE relpath=?", (relpath,))
+                row = c.fetchone()
+                if row and float(row[0]) == float(mtime):
+                    # up-to-date, skip
+                    continue
+
+                # Load into DataFrame
+                try:
+                    if ext == 'csv':
+                        df = pd.read_csv(filepath)
+                    else:  # npy
+                        arr = np.load(filepath, allow_pickle=True)
+                        if isinstance(arr, np.ndarray):
+                            if arr.ndim == 2:
+                                df = pd.DataFrame(arr)
+                            elif arr.ndim == 1 and hasattr(arr.dtype, 'names') and arr.dtype.names:
+                                # structured array -> DataFrame with named columns
+                                df = pd.DataFrame(arr.tolist(), columns=list(arr.dtype.names))
+                            else:
+                                df = pd.DataFrame(arr)
+                        else:
+                            print(f"auto_import_uploads: unsupported NPY structure for {relpath}, skipping.")
+                            continue
+                except Exception as e:
+                    print(f"auto_import_uploads: failed to read {relpath}: {e}")
+                    continue
+
+                # Import into SQLite (replace whole table)
+                try:
                     df.to_sql(table_name, conn, if_exists='replace', index=False)
+                    c.execute("REPLACE INTO import_etag (relpath, mtime) VALUES (?, ?)", (relpath, mtime))
+                    conn.commit()
+                    imported += 1
+                    print(f"auto_import_uploads: imported {relpath} -> table '{table_name}'")
+                except Exception as e:
+                    print(f"auto_import_uploads: failed to import {relpath} to '{table_name}': {e}")
 
-                print(f"Imported: {filename} as table '{table_name}'")
-
-                # Auto-log into uploads_log if possible
-                rel_path = os.path.relpath(filepath, UPLOAD_FOLDER)
-                parts = rel_path.split(os.sep)
-
-                if len(parts) >= 3:
-                    property_name = parts[0]
-                    tab = parts[1]
-                    file_name = parts[2]
-                    with sqlite3.connect(DB_NAME) as conn:
-                        c = conn.cursor()
-                        c.execute("""
-                            INSERT OR IGNORE INTO uploads_log (property, tab, filename, uploaded_at)
-                            VALUES (?, ?, ?, ?)
-                        """, (property_name, tab, file_name, datetime.datetime.now().isoformat()))
-                        conn.commit()
-                        print(f"Logged {file_name} to uploads_log.")
-                else:
-                    print(f"Skipped logging for {filename} (not in expected folder structure).")
-
-            except Exception as e:
-                print(f"Failed to import {filename}: {e}")
+    print(f"auto_import_uploads: done, {imported} table(s) updated.")
+    return imported
 
 def auto_log_material_files():
     if not os.path.exists(UPLOAD_FOLDER):
         return
 
-    all_allowed_exts = ALLOWED_DATASET_EXTENSIONS | ALLOWED_RESULTS_EXTENSIONS | ALLOWED_MUSIC_EXTENSIONS
+    all_allowed_exts = ALLOWED_DATASET_EXTENSIONS | ALLOWED_RESULTS_EXTENSIONS
+
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        # Ensure uniqueness constraint exists
+        c.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_uploads
+            ON uploads_log(property, tab, filename)
+        """)
+        conn.commit()
 
     for root, dirs, files in os.walk(UPLOAD_FOLDER):
         for filename in files:
