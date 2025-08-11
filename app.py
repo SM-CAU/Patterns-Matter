@@ -1,5 +1,6 @@
-# Test deploy via GitHub Actions. This app will temporarily run on a public IP.
-# It is a Flask web application that allows users to upload datasets, view results, and manage
+                    # Toydatabase for Patterns Matter #
+# ======= Imports ====== #
+
 from flask import Flask, request, redirect, url_for, render_template, send_from_directory, flash, session, current_app, abort, jsonify
 import os
 import pandas as pd
@@ -9,7 +10,9 @@ from werkzeug.utils import secure_filename
 import datetime
 import re
 import csv
+
 # ========== SETTINGS ==========
+
 UPLOAD_FOLDER = 'uploads'
 DB_NAME = 'patterns-matter.db' # SQLite database file
 ADMIN_PASSWORD = 'IronMa1deN!'
@@ -18,6 +21,95 @@ ALLOWED_DATASET_EXTENSIONS = {'csv', 'npy'}
 ALLOWED_RESULTS_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'pdf', 'docx'}
 ALLOWED_MUSIC_EXTENSIONS = {'mp3', 'wav', 'm4a', 'ogg', 'mp4'}
 
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.secret_key = 'IronMa1deN!'
+
+# ---------- Utility Functions ----------
+
+def allowed_dataset_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_DATASET_EXTENSIONS
+
+def allowed_results_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_RESULTS_EXTENSIONS
+
+def allowed_music_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_MUSIC_EXTENSIONS
+
+# ========== Helper Functions ========== #
+
+# the  current auto_log_material_files() ---
+def ensure_uploads_log_schema():
+    # Creates the table and backfills missing columns so existing DBs keep working
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS uploads_log (
+                property     TEXT NOT NULL,
+                tab          TEXT NOT NULL,
+                filename     TEXT NOT NULL,
+                uploaded_at  TEXT,
+                source       TEXT,
+                description  TEXT
+            )
+        """)
+        # Backfill columns if the table already existed without them
+        existing = {row[1] for row in c.execute("PRAGMA table_info(uploads_log)")}
+        for col, ddl in [
+            ("uploaded_at", "ALTER TABLE uploads_log ADD COLUMN uploaded_at TEXT"),
+            ("source",      "ALTER TABLE uploads_log ADD COLUMN source TEXT"),
+            ("description", "ALTER TABLE uploads_log ADD COLUMN description TEXT"),
+        ]:
+            if col not in existing:
+                c.execute(ddl)
+
+        c.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
+            ON uploads_log(property, tab, filename)
+        """)
+        conn.commit()
+
+def auto_log_material_files():
+    ensure_uploads_log_schema()
+
+    # Avoid relying on current_app when we can read from app.config directly
+    upload_root = app.config.get("UPLOAD_FOLDER", UPLOAD_FOLDER)
+    if not os.path.exists(upload_root):
+        return
+
+    all_allowed_exts = ALLOWED_DATASET_EXTENSIONS | ALLOWED_RESULTS_EXTENSIONS
+    to_insert = []
+
+    for root, _, files in os.walk(upload_root):
+        rel_root = os.path.relpath(root, upload_root)
+        if rel_root.split(os.sep)[0] == "clips":
+            continue
+
+        for fname in files:
+            ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+            if ext not in all_allowed_exts:
+                continue
+
+            rel_path = os.path.relpath(os.path.join(root, fname), upload_root)
+            parts = rel_path.split(os.sep)
+            if len(parts) >= 3:
+                property_name, tab, file_name = parts[0], parts[1], parts[2]
+                to_insert.append((property_name, tab, file_name))
+
+    if not to_insert:
+        return
+
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        # Upsert: if the file is already logged, refresh uploaded_at
+        c.executemany("""
+            INSERT INTO uploads_log (property, tab, filename, uploaded_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(property, tab, filename)
+            DO UPDATE SET uploaded_at=excluded.uploaded_at
+        """, to_insert)
+        conn.commit()
+                
 # Automation of import to sqlite3 database
 def auto_import_uploads():
     """
@@ -109,107 +201,36 @@ def auto_import_uploads():
     print(f"auto_import_uploads: done, {imported} table(s) updated.")
     return imported
 
-# the  current auto_log_material_files() ---
-def ensure_uploads_log_schema():
-    # Creates the table and backfills missing columns so existing DBs keep working
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS uploads_log (
-                property     TEXT NOT NULL,
-                tab          TEXT NOT NULL,
-                filename     TEXT NOT NULL,
-                uploaded_at  TEXT,
-                source       TEXT,
-                description  TEXT
-            )
-        """)
-        # Backfill columns if the table already existed without them
-        existing = {row[1] for row in c.execute("PRAGMA table_info(uploads_log)")}
-        for col, ddl in [
-            ("uploaded_at", "ALTER TABLE uploads_log ADD COLUMN uploaded_at TEXT"),
-            ("source",      "ALTER TABLE uploads_log ADD COLUMN source TEXT"),
-            ("description", "ALTER TABLE uploads_log ADD COLUMN description TEXT"),
-        ]:
-            if col not in existing:
-                c.execute(ddl)
+# Run-once warm-up
 
-        c.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
-            ON uploads_log(property, tab, filename)
-        """)
-        conn.commit()
+from threading import Lock
 
+_startup_done = False
+_startup_lock = Lock()
 
-def auto_log_material_files():
-    ensure_uploads_log_schema()
+def _run_startup_tasks():
+    global _startup_done
+    with _startup_lock:
+        if _startup_done:
+            return
+        try:
+            ensure_uploads_log_schema()   # if you have this helper; otherwise drop it
+        except Exception as e:
+            app.logger.warning("ensure_uploads_log_schema skipped: %s", e)
+        try:
+            auto_import_uploads()
+        except Exception as e:
+            app.logger.warning("auto_import_uploads skipped: %s", e)
+        try:
+            auto_log_material_files()
+        except Exception as e:
+            app.logger.warning("auto_log_material_files skipped: %s", e)
+        _startup_done = True
 
-    # Avoid relying on current_app when we can read from app.config directly
-    upload_root = app.config.get("UPLOAD_FOLDER", UPLOAD_FOLDER)
-    if not os.path.exists(upload_root):
-        return
-
-    all_allowed_exts = ALLOWED_DATASET_EXTENSIONS | ALLOWED_RESULTS_EXTENSIONS
-    to_insert = []
-
-    for root, _, files in os.walk(upload_root):
-        rel_root = os.path.relpath(root, upload_root)
-        if rel_root.split(os.sep)[0] == "clips":
-            continue
-
-        for fname in files:
-            ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
-            if ext not in all_allowed_exts:
-                continue
-
-            rel_path = os.path.relpath(os.path.join(root, fname), upload_root)
-            parts = rel_path.split(os.sep)
-            if len(parts) >= 3:
-                property_name, tab, file_name = parts[0], parts[1], parts[2]
-                to_insert.append((property_name, tab, file_name))
-
-    if not to_insert:
-        return
-
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        # Upsert: if the file is already logged, refresh uploaded_at
-        c.executemany("""
-            INSERT INTO uploads_log (property, tab, filename, uploaded_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(property, tab, filename)
-            DO UPDATE SET uploaded_at=excluded.uploaded_at
-        """, to_insert)
-        conn.commit()
-
-
-# ========== FLASK APP ==========
-
-app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.secret_key = 'IronMa1deN!'
-
-@app.before_first_request
-def _warm_up():
-    try:
-        auto_import_uploads()
-    except Exception as e:
-        app.logger.warning("auto_import_uploads skipped: %s", e)
-    try:
-        auto_log_material_files()
-    except Exception as e:
-        app.logger.warning("auto_log_material_files skipped: %s", e)
-
-
-# ---------- Utility Functions ----------
-def allowed_dataset_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_DATASET_EXTENSIONS
-
-def allowed_results_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_RESULTS_EXTENSIONS
-
-def allowed_music_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_MUSIC_EXTENSIONS
+@app.before_request
+def _startup_once():
+    if not _startup_done:
+        _run_startup_tasks()
 
 # ========== ROUTES ==========
 
