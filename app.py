@@ -110,72 +110,96 @@ def auto_import_uploads():
     return imported
 
 # the  current auto_log_material_files() ---
-@app.before_first_request
-def _seed_uploads_log():
-    auto_log_material_files()
-
-
 def ensure_uploads_log_schema():
-    # Creates table if missing and enforces uniqueness on (property, tab, filename)
+    # Creates the table and backfills missing columns so existing DBs keep working
     with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
         c.execute("""
-        CREATE TABLE IF NOT EXISTS uploads_log (
-            property   TEXT NOT NULL,
-            tab        TEXT NOT NULL,
-            filename   TEXT NOT NULL
-        )
+            CREATE TABLE IF NOT EXISTS uploads_log (
+                property     TEXT NOT NULL,
+                tab          TEXT NOT NULL,
+                filename     TEXT NOT NULL,
+                uploaded_at  TEXT,
+                source       TEXT,
+                description  TEXT
+            )
         """)
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique ON uploads_log(property, tab, filename)")
+        # Backfill columns if the table already existed without them
+        existing = {row[1] for row in c.execute("PRAGMA table_info(uploads_log)")}
+        for col, ddl in [
+            ("uploaded_at", "ALTER TABLE uploads_log ADD COLUMN uploaded_at TEXT"),
+            ("source",      "ALTER TABLE uploads_log ADD COLUMN source TEXT"),
+            ("description", "ALTER TABLE uploads_log ADD COLUMN description TEXT"),
+        ]:
+            if col not in existing:
+                c.execute(ddl)
+
+        c.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
+            ON uploads_log(property, tab, filename)
+        """)
         conn.commit()
+
 
 def auto_log_material_files():
     ensure_uploads_log_schema()
 
-    upload_root = current_app.config.get("UPLOAD_FOLDER", UPLOAD_FOLDER)
+    # Avoid relying on current_app when we can read from app.config directly
+    upload_root = app.config.get("UPLOAD_FOLDER", UPLOAD_FOLDER)
     if not os.path.exists(upload_root):
         return
 
     all_allowed_exts = ALLOWED_DATASET_EXTENSIONS | ALLOWED_RESULTS_EXTENSIONS
-
     to_insert = []
-    for root, dirs, files in os.walk(upload_root):
+
+    for root, _, files in os.walk(upload_root):
+        rel_root = os.path.relpath(root, upload_root)
+        if rel_root.split(os.sep)[0] == "clips":
+            continue
+
         for fname in files:
             ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
             if ext not in all_allowed_exts:
                 continue
 
-            fpath = os.path.join(root, fname)
-            rel_path = os.path.relpath(fpath, upload_root)
+            rel_path = os.path.relpath(os.path.join(root, fname), upload_root)
             parts = rel_path.split(os.sep)
-
-            # Skip music uploads under /uploads/clips/
-            if parts and parts[0] == "clips":
-                continue
-
             if len(parts) >= 3:
                 property_name, tab, file_name = parts[0], parts[1], parts[2]
                 to_insert.append((property_name, tab, file_name))
 
-    if to_insert:
-        with sqlite3.connect(DB_NAME) as conn:
-            c = conn.cursor()
-            # idempotent insert: ignore duplicates quietly
-            c.executemany(
-                "INSERT OR IGNORE INTO uploads_log(property, tab, filename) VALUES (?, ?, ?)",
-                to_insert
-            )
-            conn.commit()
+    if not to_insert:
+        return
+
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        # Upsert: if the file is already logged, refresh uploaded_at
+        c.executemany("""
+            INSERT INTO uploads_log (property, tab, filename, uploaded_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(property, tab, filename)
+            DO UPDATE SET uploaded_at=excluded.uploaded_at
+        """, to_insert)
+        conn.commit()
 
 
 # ========== FLASK APP ==========
+
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.secret_key = 'IronMa1deN!'
 
-# Create folders if missing
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+@app.before_first_request
+def _warm_up():
+    try:
+        auto_import_uploads()
+    except Exception as e:
+        app.logger.warning("auto_import_uploads skipped: %s", e)
+    try:
+        auto_log_material_files()
+    except Exception as e:
+        app.logger.warning("auto_log_material_files skipped: %s", e)
+
 
 # ---------- Utility Functions ----------
 def allowed_dataset_file(filename):
@@ -693,16 +717,6 @@ def add_drive_clip():
 
     return render_template('add_drive_clip.html', message=message)
 
-
-# --- Print routes for debugging (optional, can comment out) ---
-for rule in app.url_map.iter_rules():
-    print(rule.endpoint, rule)
-
-auto_import_uploads()
-try:
-    auto_log_material_files()
-except Exception as e:
-    print("auto_log_material_files skipped:", e)
 
 
 # ========== MAIN ==========
