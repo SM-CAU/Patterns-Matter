@@ -38,77 +38,88 @@ def allowed_music_file(filename):
 
 # ========== Helper Functions ========== #
 
-# auto_log_material_files ---
 def ensure_uploads_log_schema():
-    # Creates the table and backfills missing columns so existing DBs keep working
+    """Create/upgrade uploads_log to the expected schema; ensure uniqueness."""
     with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
+        # Create table if missing (includes UNIQUE on the key)
         c.execute("""
-            CREATE TABLE IF NOT EXISTS uploads_log (
-                property     TEXT NOT NULL,
-                tab          TEXT NOT NULL,
-                filename     TEXT NOT NULL,
-                uploaded_at  TEXT,
-                source       TEXT,
-                description  TEXT
-            )
+        CREATE TABLE IF NOT EXISTS uploads_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            property   TEXT NOT NULL,
+            tab        TEXT NOT NULL,
+            filename   TEXT NOT NULL,
+            uploaded_at TEXT,
+            UNIQUE(property, tab, filename)
+        )
         """)
-        # Backfill columns if the table already existed without them
-        existing = {row[1] for row in c.execute("PRAGMA table_info(uploads_log)")}
-        for col, ddl in [
-            ("uploaded_at", "ALTER TABLE uploads_log ADD COLUMN uploaded_at TEXT"),
-            ("source",      "ALTER TABLE uploads_log ADD COLUMN source TEXT"),
-            ("description", "ALTER TABLE uploads_log ADD COLUMN description TEXT"),
-        ]:
-            if col not in existing:
-                c.execute(ddl)
+        # Ensure uploaded_at column exists (for older DBs)
+        cols = {row[1] for row in c.execute("PRAGMA table_info(uploads_log)").fetchall()}
+        if "uploaded_at" not in cols:
+            c.execute("ALTER TABLE uploads_log ADD COLUMN uploaded_at TEXT")
+            # Try to migrate from legacy logged_at if it exists
+            try:
+                c.execute("UPDATE uploads_log SET uploaded_at = COALESCE(uploaded_at, logged_at) WHERE uploaded_at IS NULL")
+            except sqlite3.OperationalError:
+                pass  # logged_at may not exist; ignore
 
+        # Ensure a unique index exists even if the table was created long ago
         c.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
-            ON uploads_log(property, tab, filename)
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
+        ON uploads_log(property, tab, filename)
         """)
         conn.commit()
 
 def auto_log_material_files():
+    """
+    Walk UPLOAD_FOLDER and upsert one row per (property, tab, filename).
+    Idempotent: safe to call many times; never throws UNIQUE errors.
+    """
     ensure_uploads_log_schema()
 
-    # Avoid relying on current_app when we can read from app.config directly
-    upload_root = app.config.get("UPLOAD_FOLDER", UPLOAD_FOLDER)
-    if not os.path.exists(upload_root):
-        return
+    root_dir = UPLOAD_FOLDER
+    if not os.path.exists(root_dir):
+        return {"status": "skip", "reason": "UPLOAD_FOLDER missing", "added_or_updated": 0}
 
-    all_allowed_exts = ALLOWED_DATASET_EXTENSIONS | ALLOWED_RESULTS_EXTENSIONS
-    to_insert = []
+    allowed_exts = (ALLOWED_DATASET_EXTENSIONS | ALLOWED_RESULTS_EXTENSIONS)
+    rows = []  # (property, tab, filename, uploaded_at)
 
-    for root, _, files in os.walk(upload_root):
-        rel_root = os.path.relpath(root, upload_root)
-        if rel_root.split(os.sep)[0] == "clips":
-            continue
-
+    for root, _dirs, files in os.walk(root_dir):
         for fname in files:
-            ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
-            if ext not in all_allowed_exts:
+            ext = fname.rsplit('.', 1)[-1].lower() if '.' in fname else ''
+            if ext not in allowed_exts:
                 continue
 
-            rel_path = os.path.relpath(os.path.join(root, fname), upload_root)
+            full = os.path.join(root, fname)
+            rel_path = os.path.relpath(full, root_dir)  # e.g. bandgap/dataset/foo.csv
             parts = rel_path.split(os.sep)
+
+            # Skip music under uploads/clips/
+            if parts and parts[0] == 'clips':
+                continue
+
             if len(parts) >= 3:
-                property_name, tab, file_name = parts[0], parts[1], parts[2]
-                to_insert.append((property_name, tab, file_name))
+                prop, tab, filename = parts[0], parts[1], parts[2]
+                rows.append((prop, tab, filename, datetime.utcnow().isoformat(timespec="seconds")))
 
-    if not to_insert:
-        return
+    if not rows:
+        return {"status": "ok", "added_or_updated": 0}
 
+    added_or_updated = 0
     with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
-        # Upsert: if the file is already logged, refresh uploaded_at
-        c.executemany("""
-            INSERT INTO uploads_log (property, tab, filename, uploaded_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(property, tab, filename)
-            DO UPDATE SET uploaded_at=excluded.uploaded_at
-        """, to_insert)
+        upsert = """
+        INSERT INTO uploads_log (property, tab, filename, uploaded_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(property, tab, filename)
+        DO UPDATE SET uploaded_at = excluded.uploaded_at
+        """
+        for r in rows:
+            c.execute(upsert, r)
+            added_or_updated += 1
         conn.commit()
+
+    return {"status": "ok", "added_or_updated": added_or_updated}
                 
 # Automation of import to sqlite3 database
 def auto_import_uploads():
@@ -231,33 +242,36 @@ def _run_startup_tasks():
 def _startup_once():
     if not _startup_done:
         _run_startup_tasks()
+        
 
 # ========== ROUTES ==========
+
+
 # Admin only rescanning for duplicates and re-importing
-def _uploads_count():
-    import sqlite3
-    with sqlite3.connect(DB_NAME) as conn:
-        (n,) = conn.execute("SELECT COUNT(*) FROM uploads_log").fetchone()
-        return n
 
-@app.route('/admin/rescan_uploads', methods=['GET', 'POST'])
+@app.route("/admin/rescan_uploads")
 def admin_rescan_uploads():
-    if not session.get('admin'):
-        return redirect(url_for('login'))
+    if not session.get("admin"):
+        return redirect(url_for("login"))
 
-    before = _uploads_count()
+    def count_rows():
+        with sqlite3.connect(DB_NAME) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM uploads_log")
+            return cur.fetchone()[0]
+
+    before = count_rows()
     try:
-        auto_log_material_files()  # walks UPLOAD_FOLDER and UPSERTs rows
-        status = "ok"
+        result = auto_log_material_files()
     except Exception as e:
-        status = f"auto_log_material_files failed: {e}"
+        return jsonify({"status": f"auto_log_material_files failed: {e}"}), 500
+    after = count_rows()
 
-    after = _uploads_count()
     return jsonify({
-        "status": status,
+        "status": result.get("status"),
+        "added_or_updated": result.get("added_or_updated"),
         "rows_before": before,
-        "rows_after": after,
-        "added_or_updated": after - before
+        "rows_after": after
     })
 
 # -- Admin login/logout --
