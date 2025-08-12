@@ -36,6 +36,168 @@ def allowed_results_file(filename):
 def allowed_music_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_MUSIC_EXTENSIONS
 
+# temporary debug function
+
+# =========================
+# DEBUG: diagnostics helpers
+# =========================
+import json
+from collections import defaultdict
+from flask import jsonify
+from werkzeug.exceptions import abort
+
+def _debug_safe_admin():
+    # basic gate: session['admin'] must be truthy
+    if not session.get('admin'):
+        abort(403)
+
+def _debug_walk_files(max_items=200):
+    files = []
+    try:
+        root = os.path.abspath(UPLOAD_FOLDER)
+        for r, _, f_list in os.walk(root):
+            for fn in f_list:
+                rel = os.path.relpath(os.path.join(r, fn), root)
+                files.append(rel.replace("\\", "/"))
+                if len(files) >= max_items:
+                    return files, True
+        return files, False
+    except Exception as e:
+        return [f"ERROR walking UPLOAD_FOLDER: {e}"], False
+
+def _debug_uploads_log_snapshot():
+    data = []
+    dups = defaultdict(list)
+    distinct = set()
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            # what DB are we using?
+            db_abs = os.path.abspath(DB_NAME)
+            # schema sanity
+            schema = c.execute("SELECT name, sql FROM sqlite_master WHERE type='table' AND name='uploads_log'").fetchone()
+            # rows
+            rows = c.execute("""
+                SELECT rowid, property, tab, filename, 
+                       COALESCE(source,'') AS source,
+                       COALESCE(description,'') AS description,
+                       COALESCE(uploaded_at,'') AS uploaded_at
+                FROM uploads_log
+                ORDER BY uploaded_at DESC, rowid DESC
+            """).fetchall()
+            for r in rows:
+                tup = (r["property"], r["tab"], r["filename"])
+                distinct.add(tup)
+                dups[tup].append(r["rowid"])
+                data.append({
+                    "rowid": r["rowid"],
+                    "property": r["property"],
+                    "tab": r["tab"],
+                    "filename": r["filename"],
+                    "uploaded_at": r["uploaded_at"],
+                })
+            # find groups with more than 1 row
+            dup_groups = [
+                {"property": p, "tab": t, "filename": f, "rowids": ids, "count": len(ids)}
+                for (p, t, f), ids in dups.items() if len(ids) > 1
+            ]
+            return {
+                "db_abs_path": db_abs,
+                "uploads_log_table": schema["sql"] if schema else None,
+                "total_rows": len(data),
+                "distinct_triplets": len(distinct),
+                "duplicates_groups": sorted(dup_groups, key=lambda x: -x["count"])[:50],
+                "sample_rows": data[:50],
+            }
+    except Exception as e:
+        return {"error": f"snapshot failed: {e}"}
+
+def _debug_compare_property_tab(property_name, tab, max_items=200):
+    report = {"property": property_name, "tab": tab}
+    # FS view (what's actually on disk)
+    fs_files = []
+    try:
+        base = os.path.join(UPLOAD_FOLDER, property_name, tab)
+        base_abs = os.path.abspath(base)
+        for r, _, f_list in os.walk(base_abs):
+            for fn in f_list:
+                rel = os.path.relpath(os.path.join(r, fn), os.path.abspath(UPLOAD_FOLDER)).replace("\\", "/")
+                fs_files.append(rel)
+                if len(fs_files) >= max_items:
+                    break
+        report["fs_files"] = fs_files
+    except Exception as e:
+        report["fs_error"] = f"error walking FS: {e}"
+
+    # DB view (what uploads_log says)
+    db_files = []
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            rows = c.execute("""
+                SELECT rowid, filename, COALESCE(uploaded_at,'') AS uploaded_at
+                FROM uploads_log
+                WHERE property = ? AND tab = ?
+                ORDER BY uploaded_at DESC, rowid DESC
+            """, (property_name, tab)).fetchall()
+            for r in rows:
+                db_files.append({
+                    "rowid": r["rowid"],
+                    "filename": r["filename"],
+                    "uploaded_at": r["uploaded_at"]
+                })
+        report["db_files"] = db_files
+    except Exception as e:
+        report["db_error"] = f"error reading DB: {e}"
+
+    # Cross-check: mark DB rows whose file isn’t on disk
+    missing_on_disk = []
+    for r in db_files:
+        fp = os.path.join(UPLOAD_FOLDER, property_name, tab, r["filename"])
+        if not os.path.isfile(fp):
+            missing_on_disk.append({"rowid": r["rowid"], "filename": r["filename"]})
+    report["db_entries_missing_on_disk"] = missing_on_disk
+
+    # Cross-check: mark files on disk that aren’t in DB
+    db_names = set(r["filename"] for r in db_files)
+    on_disk_not_in_db = []
+    for rel in fs_files:
+        parts = rel.split("/")
+        if len(parts) >= 3 and parts[0] == property_name and parts[1] == tab:
+            if parts[2] not in db_names:
+                on_disk_not_in_db.append(parts[2])
+    report["disk_files_not_in_db"] = sorted(set(on_disk_not_in_db))
+    return report
+
+# --------------------------
+# Admin-only debug endpoints
+# --------------------------
+@app.get("/admin/_diag/where")
+def admin_diag_where():
+    _debug_safe_admin()
+    UP_abs = os.path.abspath(UPLOAD_FOLDER)
+    db_abs = os.path.abspath(DB_NAME)
+    fs_list, truncated = _debug_walk_files()
+    snap = _debug_uploads_log_snapshot()
+    return jsonify({
+        "UPLOAD_FOLDER": UP_abs,
+        "DB_NAME": db_abs,
+        "walk_uploads_folder_count": len(fs_list),
+        "walk_uploads_folder_truncated": truncated,
+        "walk_uploads_folder_sample": fs_list[:50],
+        "uploads_log_snapshot": snap
+    })
+
+@app.get("/admin/_diag/compare/<property_name>/<tab>")
+def admin_diag_compare(property_name, tab):
+    _debug_safe_admin()
+    return jsonify(_debug_compare_property_tab(property_name, tab))
+# =========================
+# END DEBUG
+# =========================
+
 # ========== Helper Functions ========== #
 
 # the  current auto_log_material_files() ---
