@@ -419,101 +419,119 @@ def query_sql():
 @app.route('/')
 def public_home():
     return render_template('landing.html')
-
+#########################################################
 @app.route('/materials')
 def materials_portal():
     return render_template('materials_portal.html')
-
+#########################################################
 @app.route('/materials/<property_name>/<tab>', methods=['GET', 'POST'])
 def property_detail(property_name, tab):
+    # ---- titles / guards ----
     pretty_titles = {
         'bandgap': 'Band Gap',
         'formation_energy': 'Formation Energy',
         'melting_point': 'Melting Point',
-        'oxidation_state': 'Oxidation State'
+        'oxidation_state': 'Oxidation State',
     }
-    if property_name not in pretty_titles or tab not in ['dataset', 'results']:
+    if property_name not in pretty_titles or tab not in ('dataset', 'results'):
         return "Not found.", 404
 
     upload_message = ""
     edit_message = ""
     is_admin = session.get('admin', False)
 
+    # ---- admin POST handlers ----
     if is_admin and request.method == 'POST':
-        # Inline edit form (from table row)
+        # Inline row edit
         if 'edit_row' in request.form:
             row_filename = request.form.get('row_filename')
-            new_source = request.form.get('row_source', '').strip() if tab == 'dataset' else None
-            new_desc = request.form.get('row_description', '').strip()
-            with sqlite3.connect(DB_NAME) as conn:
-                c = conn.cursor()
-                if tab == 'dataset':
+            safe_row_filename = secure_filename(os.path.basename(row_filename or ""))
+
+            new_desc = (request.form.get('row_description') or '').strip()
+            if tab == 'dataset':
+                new_source = (request.form.get('row_source') or '').strip()
+                with sqlite3.connect(DB_NAME) as conn:
+                    c = conn.cursor()
                     c.execute("""
                         UPDATE uploads_log
-                        SET source=?, description=?
-                        WHERE property=? AND tab=? AND filename=?
-                    """, (new_source, new_desc, property_name, tab, row_filename))
-                else:
+                           SET source = ?, description = ?
+                         WHERE property = ? AND tab = ? AND filename = ?
+                    """, (new_source, new_desc, property_name, tab, safe_row_filename))
+                    conn.commit()
+            else:
+                with sqlite3.connect(DB_NAME) as conn:
+                    c = conn.cursor()
                     c.execute("""
                         UPDATE uploads_log
-                        SET description=?
-                        WHERE property=? AND tab=? AND filename=?
-                    """, (new_desc, property_name, tab, row_filename))
-                conn.commit()
-            edit_message = f"Updated info for {row_filename}."
-        # Upload form
+                           SET description = ?
+                         WHERE property = ? AND tab = ? AND filename = ?
+                    """, (new_desc, property_name, tab, safe_row_filename))
+                    conn.commit()
+            edit_message = f"Updated info for {safe_row_filename}."
+
+        # New file upload
         elif 'file' in request.files:
-            if request.files['file'].filename == '':
+            f = request.files['file']
+            if not f or f.filename == '':
                 upload_message = "No file selected."
             else:
-                file = request.files['file']
-                # Set allowed extensions logic
+                # Validate extension by tab
                 if tab == 'dataset':
-                    is_allowed = allowed_dataset_file(file.filename)
+                    is_allowed = allowed_dataset_file(f.filename)
                     allowed_types = "CSV or NPY"
                 elif tab == 'results':
-                    is_allowed = allowed_results_file(file.filename)
+                    is_allowed = allowed_results_file(f.filename)
                     allowed_types = "JPG, PNG, GIF, PDF, or DOCX"
                 else:
                     is_allowed = False
                     allowed_types = ""
 
-                if file and is_allowed:
+                if not is_allowed:
+                    upload_message = f"File type not allowed. Only {allowed_types} supported."
+                else:
+                    # Save to disk (under /uploads/<property>/<tab>/)
                     property_folder = os.path.join(app.config['UPLOAD_FOLDER'], property_name, tab)
                     os.makedirs(property_folder, exist_ok=True)
-                    filename = secure_filename(file.filename)
-                    filepath = os.path.join(property_folder, filename)
-                    file.save(filepath)
-                    # LOG THE UPLOAD!
+                    safe_filename = secure_filename(os.path.basename(f.filename))
+                    filepath = os.path.join(property_folder, safe_filename)
+                    f.save(filepath)
+
+                    # Log to DB (idempotent)
                     with sqlite3.connect(DB_NAME) as conn:
                         c = conn.cursor()
-                        c.execute("""
+                        c.execute(
+                            """
                             INSERT INTO uploads_log (property, tab, filename, uploaded_at)
                             VALUES (?, ?, ?, ?)
                             ON CONFLICT(property, tab, filename)
-                            DO UPDATE SET uploaded_at=excluded.uploaded_at
-                        """, (property_name, tab, filename, datetime.datetime.now().isoformat()))
+                            DO UPDATE SET uploaded_at = excluded.uploaded_at
+                            """,
+                            (property_name, tab, safe_filename, datetime.datetime.now().isoformat()),
+                        )
                         conn.commit()
 
-                    upload_message = f"File {filename} uploaded for {pretty_titles[property_name]} {tab.title()}!"
-                else:
-                    upload_message = f"File type not allowed. Only {allowed_types} supported."
+                    upload_message = f"File {safe_filename} uploaded for {pretty_titles[property_name]} {tab.title()}!"
 
-    # Always fetch current uploads after handling POSTs
-    uploads = []
+    # ---- fetch current uploads (dedup to 1 row per filename; keep newest) ----
     with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
         c.execute("""
-            SELECT filename, source, description, uploaded_at
-            FROM uploads_log
-            WHERE property=? AND tab=?
-            ORDER BY uploaded_at DESC
-        """, (property_name, tab))
+            SELECT u.filename,
+                   COALESCE(u.source, '')      AS source,
+                   COALESCE(u.description, '') AS description,
+                   u.uploaded_at
+            FROM uploads_log AS u
+            JOIN (
+                SELECT filename, MAX(uploaded_at) AS max_ts
+                  FROM uploads_log
+                 WHERE property = ? AND tab = ?
+              GROUP BY filename
+            ) AS m
+              ON m.filename = u.filename AND u.uploaded_at = m.max_ts
+           WHERE u.property = ? AND u.tab = ?
+        ORDER BY u.uploaded_at DESC
+        """, (property_name, tab, property_name, tab))
         uploads = c.fetchall()
-    uploads = [
-        (fname, source, description, uploaded_at)
-        for (fname, source, description, uploaded_at) in uploads
-    ]
 
     return render_template(
         'property_detail.html',
@@ -523,10 +541,9 @@ def property_detail(property_name, tab):
         uploads=uploads,
         upload_message=upload_message,
         edit_message=edit_message,
-        admin=is_admin
+        admin=is_admin,
     )
-
-
+#########################################################
 @app.route('/uploads/<path:filename>')
 def uploaded_file(filename):
     full_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
@@ -535,7 +552,7 @@ def uploaded_file(filename):
         print('File not found:', full_path)
         abort(404)
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
+#########################################################
 @app.route('/view_result/<property_name>/<tab>/<path:filename>')
 def view_result_file(property_name, tab, filename):
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], property_name, tab, filename)
@@ -554,7 +571,7 @@ def extract_drive_id(link):
     if match:
         return match.group(1)
     raise ValueError("Invalid Drive link")
-
+#########################################################
 @app.route('/clips')
 def public_clips():
     import os
@@ -587,8 +604,7 @@ def public_clips():
     pass
 
     return render_template('clips.html', clips=clips, admin=admin)
-
-
+#########################################################
 @app.route('/dataset/<table>')
 def public_view(table):
     # Anyone can view any table
@@ -600,7 +616,7 @@ def public_view(table):
                            filename=table,
                            imported_table=table,
                            admin=False)
-
+#########################################################
 @app.route('/download/<table>')
 def download(table):
     with sqlite3.connect(DB_NAME) as conn:
@@ -608,7 +624,7 @@ def download(table):
     csv_path = os.path.join(UPLOAD_FOLDER, f"{table}.csv")
     df.to_csv(csv_path, index=False)
     return send_from_directory(UPLOAD_FOLDER, f"{table}.csv", as_attachment=True)
-
+#########################################################
 @app.route('/migrate_csv_to_db')
 def migrate_csv_to_db():
     if not session.get('admin'):
@@ -651,7 +667,7 @@ def migrate_csv_to_db():
         return "✅ Table recreated and data loaded from CSV!"
     except Exception as e:
         return f"❌ Error: {e}"
-
+#########################################################
 # SEARCH ROUTE
 @app.route('/search')
 def search():
@@ -686,7 +702,7 @@ def search():
         except Exception:
             clips = []
     return render_template('search_results.html', query=query, materials=materials, clips=clips)
-
+#########################################################
 # DELETE CLIP
 @app.route('/delete_clip/<int:clip_id>', methods=['POST'])
 def delete_clip(clip_id):
@@ -705,7 +721,7 @@ def delete_clip(clip_id):
             c.execute("DELETE FROM music_clips WHERE id = ?", (clip_id,))
             conn.commit()
     return redirect(url_for('public_clips'))
-
+#########################################################
 # DELETE DATASET/RESULT FILE
 from urllib.parse import unquote
 
@@ -740,7 +756,7 @@ def delete_dataset_file(property_name, tab, filename):
         conn.commit()
 
     return redirect(url_for('property_detail', property_name=property_name, tab=tab))
-
+#########################################################
 @app.route('/add_drive_clip', methods=['GET', 'POST'])
 def add_drive_clip():
     if not session.get('admin'):
@@ -780,8 +796,7 @@ def add_drive_clip():
             message = "❌ Invalid link or missing title."
 
     return render_template('add_drive_clip.html', message=message)
-
-
+#########################################################
 
 # ========== MAIN ==========
 if __name__ == '__main__':
