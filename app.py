@@ -73,7 +73,7 @@ def ensure_uploads_log_schema():
 def auto_log_material_files():
     """
     Walk UPLOAD_FOLDER and upsert one row per (property, tab, filename).
-    Idempotent: safe to call many times; never throws UNIQUE errors.
+    Idempotent and uses SQLite CURRENT_TIMESTAMP (no Python datetime).
     """
     ensure_uploads_log_schema()
 
@@ -82,7 +82,7 @@ def auto_log_material_files():
         return {"status": "skip", "reason": "UPLOAD_FOLDER missing", "added_or_updated": 0}
 
     allowed_exts = (ALLOWED_DATASET_EXTENSIONS | ALLOWED_RESULTS_EXTENSIONS)
-    rows = []  # (property, tab, filename, uploaded_at)
+    rows = []  # (property, tab, filename)
 
     for root, _dirs, files in os.walk(root_dir):
         for fname in files:
@@ -100,7 +100,8 @@ def auto_log_material_files():
 
             if len(parts) >= 3:
                 prop, tab, filename = parts[0], parts[1], parts[2]
-                rows.append((prop, tab, filename, datetime.utcnow().isoformat(timespec="seconds")))
+                if tab in ("dataset", "results"):
+                    rows.append((prop, tab, filename))
 
     if not rows:
         return {"status": "ok", "added_or_updated": 0}
@@ -110,9 +111,9 @@ def auto_log_material_files():
         c = conn.cursor()
         upsert = """
         INSERT INTO uploads_log (property, tab, filename, uploaded_at)
-        VALUES (?, ?, ?, ?)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(property, tab, filename)
-        DO UPDATE SET uploaded_at = excluded.uploaded_at
+        DO UPDATE SET uploaded_at = CURRENT_TIMESTAMP
         """
         for r in rows:
             c.execute(upsert, r)
@@ -246,34 +247,38 @@ def _startup_once():
 
 # ========== ROUTES ==========
 
-
+#########################################################
 # Admin only rescanning for duplicates and re-importing
 
-@app.route("/admin/rescan_uploads")
-def admin_rescan_uploads():
-    if not session.get("admin"):
-        return redirect(url_for("login"))
-
-    def count_rows():
+@app.route('/admin/rescan_uploads')
+def rescan_uploads():
+    """
+    Re-scan the UPLOAD_FOLDER and upsert entries into uploads_log.
+    Returns JSON with counts. Uses CURRENT_TIMESTAMP in SQL.
+    """
+    try:
+        # observe before/after for quick sanity checks
         with sqlite3.connect(DB_NAME) as conn:
             cur = conn.cursor()
             cur.execute("SELECT COUNT(*) FROM uploads_log")
-            return cur.fetchone()[0]
+            before = cur.fetchone()[0]
 
-    before = count_rows()
-    try:
         result = auto_log_material_files()
+
+        with sqlite3.connect(DB_NAME) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM uploads_log")
+            after = cur.fetchone()[0]
+
+        return jsonify({
+            "status": result.get("status", "ok"),
+            "added_or_updated": result.get("added_or_updated", 0),
+            "rows_before": before,
+            "rows_after": after
+        })
     except Exception as e:
         return jsonify({"status": f"auto_log_material_files failed: {e}"}), 500
-    after = count_rows()
-
-    return jsonify({
-        "status": result.get("status"),
-        "added_or_updated": result.get("added_or_updated"),
-        "rows_before": before,
-        "rows_after": after
-    })
-
+#########################################################
 # -- Admin login/logout --
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -291,7 +296,7 @@ def logout():
     session.pop('admin', None)
     flash("Logged out.")
     return redirect(url_for('public_home'))
-
+#########################################################
 # -- Admin-only home page (upload/import/query) --
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_home():
@@ -324,106 +329,8 @@ def admin_home():
         uploads=uploads,
         music_clips=music_clips
     )
-
+#########################################################
 # -- View and import (admin only) --
-@app.route('/view/<path:filename>', methods=['GET', 'POST'])
-def view_table(filename):
-    admin = session.get('admin', False)
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    ext = filename.rsplit('.', 1)[1].lower()
-    table_name = filename.replace('.', '_').replace('-', '_').replace('/', '_').replace('\\', '_')
-
-    try:
-        if ext == 'csv':
-            df = pd.read_csv(filepath)
-        elif ext == 'npy':
-            arr = np.load(filepath, allow_pickle=True)
-            if isinstance(arr, np.ndarray):
-                if arr.ndim == 2:
-                    df = pd.DataFrame(arr)
-                elif arr.ndim == 1 and hasattr(arr[0], 'dtype') and arr[0].dtype.names:
-                    df = pd.DataFrame(arr)
-                else:
-                    df = pd.DataFrame(arr)
-            else:
-                return "Unsupported NPY format for display."
-        else:
-            return "Unsupported file type."
-    except Exception as e:
-        return f"Could not read file: {e}"
-
-    # Only allow import if admin
-    if admin and request.method == 'POST' and 'import_sql' in request.form:
-        with sqlite3.connect(DB_NAME) as conn:
-            df.to_sql(table_name, conn, if_exists='replace', index=False)
-        flash(f"Table '{table_name}' imported to SQLite.")
-
-    return render_template('view_table.html',
-                           tables=[df.to_html(classes='data')],
-                           titles=df.columns.values,
-                           filename=filename,
-                           imported_table=table_name,
-                           admin=admin)
-
-
-# -- SQL query tool (admin only) --
-@app.route('/query', methods=['GET', 'POST'])
-def query_sql():
-    if not session.get('admin'):
-        return redirect(url_for('login'))
-
-    # List all tables for dropdown or info
-    tables = []
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = [r[0] for r in c.fetchall()]
-
-    sql = ""
-    result_html = ""
-    error_msg = ""
-
-    if request.method == 'POST':  
-        sql = request.form['sql']
-        try:
-            with sqlite3.connect(DB_NAME) as conn:
-                c = conn.cursor()
-                c.execute(sql)
-                # Try to fetch rows, if any
-                try:
-                    rows = c.fetchall()
-                    if rows:
-                        # Get column names
-                        columns = [desc[0] for desc in c.description]
-                        import pandas as pd
-                        df = pd.DataFrame(rows, columns=columns)
-                        result_html = df.to_html(classes='data')
-                    else:
-                        result_html = "<p><b>Query executed successfully.</b></p>"
-                except Exception:
-                    result_html = "<p><b>Query executed successfully.</b></p>"
-                conn.commit()
-        except Exception as e:
-            error_msg = str(e)
-    return render_template(
-        'sql_query.html',
-        tables=tables,
-        sql=sql,
-        result_html=result_html,
-        error_msg=error_msg,
-        admin=True
-    )
-
-# ========== PUBLIC ROUTES (view/download only) ==========
-
-@app.route('/')
-def public_home():
-    return render_template('landing.html')
-#########################################################
-@app.route('/materials')
-def materials_portal():
-    return render_template('materials_portal.html')
-#########################################################
 @app.route('/materials/<property_name>/<tab>', methods=['GET', 'POST'])
 def property_detail(property_name, tab):
     # ---- titles / guards ----
@@ -438,35 +345,39 @@ def property_detail(property_name, tab):
 
     upload_message = ""
     edit_message = ""
-    is_admin = session.get('admin', False)
+    is_admin = bool(session.get('admin'))
 
     # ---- admin POST handlers ----
     if is_admin and request.method == 'POST':
         # Inline row edit
         if 'edit_row' in request.form:
-            row_filename = request.form.get('row_filename')
-            safe_row_filename = secure_filename(os.path.basename(row_filename or ""))
-
+            row_filename = request.form.get('row_filename') or ''
+            safe_row_filename = secure_filename(os.path.basename(row_filename))
             new_desc = (request.form.get('row_description') or '').strip()
-            if tab == 'dataset':
-                new_source = (request.form.get('row_source') or '').strip()
-                with sqlite3.connect(DB_NAME) as conn:
-                    c = conn.cursor()
-                    c.execute("""
+
+            with sqlite3.connect(DB_NAME) as conn:
+                c = conn.cursor()
+                if tab == 'dataset':
+                    new_source = (request.form.get('row_source') or '').strip()
+                    c.execute(
+                        """
                         UPDATE uploads_log
                            SET source = ?, description = ?
                          WHERE property = ? AND tab = ? AND filename = ?
-                    """, (new_source, new_desc, property_name, tab, safe_row_filename))
-                    conn.commit()
-            else:
-                with sqlite3.connect(DB_NAME) as conn:
-                    c = conn.cursor()
-                    c.execute("""
+                        """,
+                        (new_source, new_desc, property_name, tab, safe_row_filename),
+                    )
+                else:
+                    c.execute(
+                        """
                         UPDATE uploads_log
                            SET description = ?
                          WHERE property = ? AND tab = ? AND filename = ?
-                    """, (new_desc, property_name, tab, safe_row_filename))
-                    conn.commit()
+                        """,
+                        (new_desc, property_name, tab, safe_row_filename),
+                    )
+                conn.commit()
+
             edit_message = f"Updated info for {safe_row_filename}."
 
         # New file upload
@@ -479,12 +390,9 @@ def property_detail(property_name, tab):
                 if tab == 'dataset':
                     is_allowed = allowed_dataset_file(f.filename)
                     allowed_types = "CSV or NPY"
-                elif tab == 'results':
+                else:  # results
                     is_allowed = allowed_results_file(f.filename)
                     allowed_types = "JPG, PNG, GIF, PDF, or DOCX"
-                else:
-                    is_allowed = False
-                    allowed_types = ""
 
                 if not is_allowed:
                     upload_message = f"File type not allowed. Only {allowed_types} supported."
@@ -496,41 +404,37 @@ def property_detail(property_name, tab):
                     filepath = os.path.join(property_folder, safe_filename)
                     f.save(filepath)
 
-                    # Log to DB (idempotent)
+                    # Log to DB (idempotent; no Python datetime)
                     with sqlite3.connect(DB_NAME) as conn:
                         c = conn.cursor()
                         c.execute(
                             """
                             INSERT INTO uploads_log (property, tab, filename, uploaded_at)
-                            VALUES (?, ?, ?, ?)
+                            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
                             ON CONFLICT(property, tab, filename)
-                            DO UPDATE SET uploaded_at = excluded.uploaded_at
+                            DO UPDATE SET uploaded_at = CURRENT_TIMESTAMP
                             """,
-                            (property_name, tab, safe_filename, datetime.datetime.now().isoformat()),
+                            (property_name, tab, safe_filename),
                         )
                         conn.commit()
 
                     upload_message = f"File {safe_filename} uploaded for {pretty_titles[property_name]} {tab.title()}!"
 
-    # ---- fetch current uploads (dedup to 1 row per filename; keep newest) ----
+    # ---- fetch current uploads (unique per key thanks to UNIQUE index) ----
     with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
-        c.execute("""
-            SELECT u.filename,
-                   COALESCE(u.source, '')      AS source,
-                   COALESCE(u.description, '') AS description,
-                   u.uploaded_at
-            FROM uploads_log AS u
-            JOIN (
-                SELECT filename, MAX(uploaded_at) AS max_ts
-                  FROM uploads_log
-                 WHERE property = ? AND tab = ?
-              GROUP BY filename
-            ) AS m
-              ON m.filename = u.filename AND u.uploaded_at = m.max_ts
-           WHERE u.property = ? AND u.tab = ?
-        ORDER BY u.uploaded_at DESC
-        """, (property_name, tab, property_name, tab))
+        c.execute(
+            """
+            SELECT filename,
+                   COALESCE(source, '')      AS source,
+                   COALESCE(description, '') AS description,
+                   uploaded_at
+              FROM uploads_log
+             WHERE property = ? AND tab = ?
+          ORDER BY uploaded_at DESC, filename
+            """,
+            (property_name, tab),
+        )
         uploads = c.fetchall()
 
     return render_template(
@@ -796,6 +700,7 @@ def add_drive_clip():
             message = "❌ Invalid link or missing title."
 
     return render_template('add_drive_clip.html', message=message)
+
 #########################################################
 
 # ========== MAIN ==========
