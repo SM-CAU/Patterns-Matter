@@ -245,9 +245,10 @@ def _startup_once():
         _run_startup_tasks()
         
 
-# ========== ROUTES ==========
+                    # ========== ROUTES ==========
 
 #########################################################
+
 # Admin only rescanning for duplicates and re-importing
 
 @app.route('/admin/rescan_uploads')
@@ -278,7 +279,9 @@ def rescan_uploads():
         })
     except Exception as e:
         return jsonify({"status": f"auto_log_material_files failed: {e}"}), 500
+    
 #########################################################
+
 # -- Admin login/logout --
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -296,7 +299,9 @@ def logout():
     session.pop('admin', None)
     flash("Logged out.")
     return redirect(url_for('public_home'))
+
 #########################################################
+
 # -- Admin-only home page (upload/import/query) --
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_home():
@@ -329,7 +334,9 @@ def admin_home():
         uploads=uploads,
         music_clips=music_clips
     )
+    
 #########################################################
+
 # -- View and import (admin only) --
 @app.route('/materials/<property_name>/<tab>', methods=['GET', 'POST'])
 def property_detail(property_name, tab):
@@ -447,7 +454,9 @@ def property_detail(property_name, tab):
         edit_message=edit_message,
         admin=is_admin,
     )
+    
 #########################################################
+
 @app.route('/uploads/<path:filename>')
 def uploaded_file(filename):
     full_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
@@ -456,7 +465,9 @@ def uploaded_file(filename):
         print('File not found:', full_path)
         abort(404)
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
 #########################################################
+
 @app.route('/view_result/<property_name>/<tab>/<path:filename>')
 def view_result_file(property_name, tab, filename):
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], property_name, tab, filename)
@@ -475,7 +486,9 @@ def extract_drive_id(link):
     if match:
         return match.group(1)
     raise ValueError("Invalid Drive link")
+
 #########################################################
+
 @app.route('/clips')
 def public_clips():
     import os
@@ -508,7 +521,9 @@ def public_clips():
     pass
 
     return render_template('clips.html', clips=clips, admin=admin)
+
 #########################################################
+
 @app.route('/dataset/<table>')
 def public_view(table):
     # Anyone can view any table
@@ -520,7 +535,9 @@ def public_view(table):
                            filename=table,
                            imported_table=table,
                            admin=False)
+    
 #########################################################
+
 @app.route('/download/<table>')
 def download(table):
     with sqlite3.connect(DB_NAME) as conn:
@@ -528,7 +545,9 @@ def download(table):
     csv_path = os.path.join(UPLOAD_FOLDER, f"{table}.csv")
     df.to_csv(csv_path, index=False)
     return send_from_directory(UPLOAD_FOLDER, f"{table}.csv", as_attachment=True)
+
 #########################################################
+
 @app.route('/migrate_csv_to_db')
 def migrate_csv_to_db():
     if not session.get('admin'):
@@ -571,7 +590,9 @@ def migrate_csv_to_db():
         return "✅ Table recreated and data loaded from CSV!"
     except Exception as e:
         return f"❌ Error: {e}"
+    
 #########################################################
+
 # SEARCH ROUTE
 @app.route('/search')
 def search():
@@ -606,7 +627,9 @@ def search():
         except Exception:
             clips = []
     return render_template('search_results.html', query=query, materials=materials, clips=clips)
+
 #########################################################
+
 # DELETE CLIP
 @app.route('/delete_clip/<int:clip_id>', methods=['POST'])
 def delete_clip(clip_id):
@@ -625,7 +648,9 @@ def delete_clip(clip_id):
             c.execute("DELETE FROM music_clips WHERE id = ?", (clip_id,))
             conn.commit()
     return redirect(url_for('public_clips'))
+
 #########################################################
+
 # DELETE DATASET/RESULT FILE
 from urllib.parse import unquote
 
@@ -660,7 +685,9 @@ def delete_dataset_file(property_name, tab, filename):
         conn.commit()
 
     return redirect(url_for('property_detail', property_name=property_name, tab=tab))
+
 #########################################################
+
 @app.route('/add_drive_clip', methods=['GET', 'POST'])
 def add_drive_clip():
     if not session.get('admin'):
