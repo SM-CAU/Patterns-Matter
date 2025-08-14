@@ -334,6 +334,106 @@ def admin_home():
         uploads=uploads,
         music_clips=music_clips
     )
+
+#########################################################
+
+@app.route("/admin/fix_uploads_uniqueness", methods=["GET", "POST"])
+def fix_uploads_uniqueness():
+    if not session.get("admin"):
+        abort(403)
+
+    stats = {}
+    try:
+        # The schema helper may fail while dups exist; ignore and continue.
+        try:
+            ensure_uploads_log_schema()
+        except Exception as e:
+            app.logger.warning("ensure_uploads_log_schema raised (continuing): %s", e)
+
+        with sqlite3.connect(DB_NAME) as conn:
+            c = conn.cursor()
+
+            rows_before = c.execute("SELECT COUNT(*) FROM uploads_log").fetchone()[0]
+            dup_groups_before = c.execute("""
+                SELECT COUNT(*)
+                  FROM (
+                    SELECT property, tab, filename, COUNT(*) c
+                      FROM uploads_log
+                     GROUP BY property, tab, filename
+                    HAVING c > 1
+                  )
+            """).fetchone()[0]
+
+            deleted = 0
+            used_window = False
+
+            if dup_groups_before > 0:
+                # Prefer window-function method (keeps newest by uploaded_at, then highest rowid)
+                try:
+                    c.execute("""
+                        WITH ranked AS (
+                          SELECT rowid,
+                                 property, tab, filename,
+                                 COALESCE(uploaded_at, '') AS ts,
+                                 ROW_NUMBER() OVER (
+                                   PARTITION BY property, tab, filename
+                                   ORDER BY ts DESC, rowid DESC
+                                 ) AS rn
+                          FROM uploads_log
+                        )
+                        DELETE FROM uploads_log
+                         WHERE rowid IN (SELECT rowid FROM ranked WHERE rn > 1);
+                    """)
+                    used_window = True
+                    deleted = conn.total_changes
+                except sqlite3.OperationalError:
+                    # Fallback for older SQLite (no window functions):
+                    # keep the earliest row per key (good enough to enforce uniqueness)
+                    c.execute("""
+                        DELETE FROM uploads_log
+                         WHERE rowid NOT IN (
+                           SELECT MIN(rowid)
+                             FROM uploads_log
+                            GROUP BY property, tab, filename
+                         );
+                    """)
+                    deleted = conn.total_changes
+
+            # Now enforce uniqueness with an index.
+            # If dups remain for any reason, this will raise; we’ll report below.
+            try:
+                c.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
+                    ON uploads_log(property, tab, filename)
+                """)
+            except sqlite3.OperationalError as e:
+                app.logger.warning("creating unique index failed: %s", e)
+
+            conn.commit()
+
+            rows_after = c.execute("SELECT COUNT(*) FROM uploads_log").fetchone()[0]
+            dup_groups_after = c.execute("""
+                SELECT COUNT(*)
+                  FROM (
+                    SELECT property, tab, filename, COUNT(*) c
+                      FROM uploads_log
+                     GROUP BY property, tab, filename
+                    HAVING c > 1
+                  )
+            """).fetchone()[0]
+
+        stats.update({
+            "rows_before": rows_before,
+            "duplicate_groups_before": dup_groups_before,
+            "deleted_rows": deleted,
+            "used_window_delete": used_window,
+            "rows_after": rows_after,
+            "duplicate_groups_after": dup_groups_after,
+            "status": "ok" if dup_groups_after == 0 else "still_has_duplicates"
+        })
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500    
     
 #########################################################
 
