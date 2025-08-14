@@ -70,6 +70,8 @@ def ensure_uploads_log_schema():
         """)
         conn.commit()
 
+#==================================================#
+
 def auto_log_material_files():
     """
     Walk UPLOAD_FOLDER and upsert one row per (property, tab, filename).
@@ -121,7 +123,9 @@ def auto_log_material_files():
         conn.commit()
 
     return {"status": "ok", "added_or_updated": added_or_updated}
-                
+
+#==================================================#
+              
 # Automation of import to sqlite3 database
 def auto_import_uploads():
     """
@@ -213,8 +217,9 @@ def auto_import_uploads():
     print(f"auto_import_uploads: done, {imported} table(s) updated.")
     return imported
 
-# Run-once warm-up
+#==================================================#
 
+# Run-once warm-up
 from threading import Lock
 
 _startup_done = False
@@ -245,12 +250,185 @@ def _startup_once():
         _run_startup_tasks()
         
 
-                    # ========== ROUTES ==========
+####################################### ========== ROUTES ==========#####################################
+
+#########################################################
+
+# --- Public home + Admin SQL Query Tool (CRUD, multi-statement) ---
+def _list_user_tables():
+    """List non-internal SQLite tables for display in the SQL tool and home page."""
+    with sqlite3.connect(DB_NAME) as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT name
+              FROM sqlite_master
+             WHERE type='table'
+               AND name NOT LIKE 'sqlite_%'
+             ORDER BY 1
+        """)
+        return [r[0] for r in cur.fetchall()]
+
+#########################################################
+
+# Public home used by multiple templates (and health check lands here )
+@app.route("/", methods=["GET"])
+@app.route("/home", methods=["GET"])
+def public_home():
+    tables = _list_user_tables()
+    return render_template("public_home.html", tables=tables)
+
+#########################################################
+
+@app.route("/materials", methods=["GET"])
+def materials_portal():
+    root = app.config.get("UPLOAD_FOLDER", UPLOAD_FOLDER)
+    props = []
+    try:
+        for d in os.listdir(root):
+            pdir = os.path.join(root, d)
+            if not os.path.isdir(pdir):
+                continue
+            # Only show properties that have at least one allowed file in dataset/ or results/
+            has_any = False
+            for tab in ("dataset", "results"):
+                sub = os.path.join(pdir, tab)
+                if not os.path.isdir(sub):
+                    continue
+                for _r, _ds, files in os.walk(sub):
+                    if any(
+                        (f.rsplit(".", 1)[-1].lower() in (ALLOWED_DATASET_EXTENSIONS | ALLOWED_RESULTS_EXTENSIONS))
+                        for f in files
+                    ):
+                        has_any = True
+                        break
+                if has_any:
+                    break
+            if has_any:
+                props.append(d)
+    except Exception as e:
+        app.logger.warning("materials_portal: %s", e)
+
+    props.sort()
+    items = []
+    for p in props:
+        pretty = p.replace("_", " ").title()
+        items.append(
+            f"<li><b>{pretty}</b> — "
+            f"<a href='/materials/{p}/dataset'>Dataset</a> · "
+            f"<a href='/materials/{p}/results'>Results</a></li>"
+        )
+
+    html = (
+        "<!doctype html><meta charset='utf-8'>"
+        "<title>Materials</title>"
+        "<style>body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem;line-height:1.5}</style>"
+        "<h1>Materials</h1>"
+        "<ul>" + "".join(items) + "</ul>"
+        "<p><a href='/'>← Back to home</a></p>"
+    )
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+#########################################################
+
+# SQL Query Tool (admin only, CRUD, multi-statement)
+DESTRUCTIVE_REGEX = re.compile(r"\b(drop|delete|update|alter|truncate)\b", re.IGNORECASE)
+
+def _list_user_tables():
+    with sqlite3.connect(DB_NAME) as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT name
+              FROM sqlite_master
+             WHERE type='table'
+               AND name NOT LIKE 'sqlite_%'
+             ORDER BY 1
+        """)
+        return [r[0] for r in cur.fetchall()]
+
+def _strip_sql_comments(sql: str) -> str:
+    # -- inline comments
+    sql = re.sub(r"--.*?$", "", sql, flags=re.MULTILINE)
+    # /* block comments */
+    sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
+    return sql
+
+def _is_destructive(sql: str) -> bool:
+    plain = _strip_sql_comments(sql)
+    return bool(DESTRUCTIVE_REGEX.search(plain))
+
+@app.route("/admin/sql", methods=["GET", "POST"])
+@app.route("/query_sql", methods=["GET", "POST"])
+def query_sql():
+    if not session.get("admin"):
+        return redirect(url_for("login"))
+
+    tables = _list_user_tables()
+    sql = ""
+    result_html = ""
+    error_msg = ""
+    needs_confirm = False
+
+    if request.method == "POST":
+        sql = (request.form.get("sql") or "").strip()
+        user_confirmed = (request.form.get("confirm") in ("on", "1", "true", "yes"))
+
+        if not sql:
+            error_msg = "Please enter SQL."
+        elif re.search(r"\bsqlite_\w+", sql, re.IGNORECASE):
+            error_msg = "Queries that reference internal tables (sqlite_*) are blocked."
+        else:
+            try:
+                # If destructive, require explicit confirmation
+                if _is_destructive(sql) and not user_confirmed:
+                    needs_confirm = True
+                    error_msg = (
+                        "This query contains destructive statements "
+                        "(DROP/DELETE/UPDATE/ALTER/TRUNCATE). Check the box below to confirm and resubmit."
+                    )
+                else:
+                    statements = [s.strip() for s in sql.split(";") if s.strip()]
+                    total_changed = 0
+                    last_select_html = None
+
+                    with sqlite3.connect(DB_NAME) as conn:
+                        conn.execute("PRAGMA foreign_keys=ON;")
+                        cur = conn.cursor()
+
+                        for stmt in statements:
+                            if re.match(r"^\s*(with\s+.*?select|select)\b", stmt, re.IGNORECASE | re.DOTALL):
+                                cur.execute(stmt)
+                                rows = cur.fetchall()
+                                cols = [d[0] for d in cur.description] if cur.description else []
+                                df = pd.DataFrame(rows, columns=cols)
+                                last_select_html = df.to_html(classes="data", index=False)
+                            else:
+                                cur.execute(stmt)
+                                total_changed = conn.total_changes
+
+                        conn.commit()
+
+                    result_html = (
+                        last_select_html
+                        if last_select_html is not None
+                        else f"<p><b>OK.</b> Executed {len(statements)} statement(s). "
+                             f"Total changed rows: {total_changed}.</p>"
+                    )
+
+            except Exception as e:
+                error_msg = str(e)
+
+    return render_template(
+        "sql_query.html",   # <-- matches your existing template filename
+        tables=tables,
+        sql=sql,
+        result_html=result_html,
+        error_msg=error_msg,
+        needs_confirm=needs_confirm,
+    )
 
 #########################################################
 
 # Admin only rescanning for duplicates and re-importing
-
 @app.route('/admin/rescan_uploads')
 def rescan_uploads():
     """
