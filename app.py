@@ -274,59 +274,15 @@ def _list_user_tables():
 @app.route("/", methods=["GET"])
 @app.route("/home", methods=["GET"])
 def public_home():
-    tables = _list_user_tables()
-    return render_template("public_home.html", tables=tables)
+    #tables = _list_user_tables()
+    return render_template("landing.html")
 
 #########################################################
 
 @app.route("/materials", methods=["GET"])
 def materials_portal():
-    root = app.config.get("UPLOAD_FOLDER", UPLOAD_FOLDER)
-    props = []
-    try:
-        for d in os.listdir(root):
-            pdir = os.path.join(root, d)
-            if not os.path.isdir(pdir):
-                continue
-            # Only show properties that have at least one allowed file in dataset/ or results/
-            has_any = False
-            for tab in ("dataset", "results"):
-                sub = os.path.join(pdir, tab)
-                if not os.path.isdir(sub):
-                    continue
-                for _r, _ds, files in os.walk(sub):
-                    if any(
-                        (f.rsplit(".", 1)[-1].lower() in (ALLOWED_DATASET_EXTENSIONS | ALLOWED_RESULTS_EXTENSIONS))
-                        for f in files
-                    ):
-                        has_any = True
-                        break
-                if has_any:
-                    break
-            if has_any:
-                props.append(d)
-    except Exception as e:
-        app.logger.warning("materials_portal: %s", e)
-
-    props.sort()
-    items = []
-    for p in props:
-        pretty = p.replace("_", " ").title()
-        items.append(
-            f"<li><b>{pretty}</b> — "
-            f"<a href='/materials/{p}/dataset'>Dataset</a> · "
-            f"<a href='/materials/{p}/results'>Results</a></li>"
-        )
-
-    html = (
-        "<!doctype html><meta charset='utf-8'>"
-        "<title>Materials</title>"
-        "<style>body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem;line-height:1.5}</style>"
-        "<h1>Materials</h1>"
-        "<ul>" + "".join(items) + "</ul>"
-        "<p><a href='/'>← Back to home</a></p>"
-    )
-    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+    # Uses your templates/materials_portal.html
+    return render_template("materials_portal.html")
 
 #########################################################
 
