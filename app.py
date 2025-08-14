@@ -38,6 +38,65 @@ def allowed_music_file(filename):
 
 # ========== Helper Functions ========== #
 
+_SQLITE_RESERVED_PREFIXES = ("sqlite_",)
+
+def tableize_basename(name: str) -> str:
+    """
+    Convert a *basename only* (e.g., 'Featurized Band Gap Data.csv') into a
+    safe SQLite table name. Preserves case (to match your existing tables).
+    Ensures:
+      - No path separators
+      - Allowed chars: [A-Za-z0-9_]
+      - No leading 'sqlite_' prefix
+      - Not empty; if empty, returns 't_unnamed'
+      - Collapses multiple underscores
+      - Appends an extension suffix (_csv/_npy) if the original had one
+    """
+
+    base = os.path.basename(name or "").strip()
+    if not base:
+        return "t_unnamed"
+
+    # Split extension (if any) for suffixing
+    stem, ext = os.path.splitext(base)
+    ext_suffix = ""
+    if ext:
+        e = ext.lstrip(".").lower()
+        if e in ("csv", "npy"):
+            ext_suffix = f"_{e}"
+        else:
+            # Non-dataset extension: still keep it to avoid collisions
+            ext_suffix = f"_{e}"
+
+    # Replace separators and disallowed chars with underscores
+    s = stem.replace(".", "_").replace("-", "_").replace(" ", "_")
+    s = re.sub(r"[^0-9A-Za-z_]", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+
+    if not s:
+        s = "t_unnamed"
+
+    # Avoid reserved internal prefix
+    lowered = s.lower()
+    if any(lowered.startswith(p) for p in _SQLITE_RESERVED_PREFIXES):
+        s = "t_" + s
+
+    # names  in reasonable length
+    if len(s) > 120:
+        s = s[:120].rstrip("_")
+
+    return f"{s}{ext_suffix}"
+
+def file_to_table_name(filename: str) -> str:
+    """
+    Small wrapper that ensures we only pass a basename to the canonical function.
+    Use this everywhere you need to turn a filename into a table name.
+    """
+    import os
+    return tableize_basename(os.path.basename(filename or ""))
+
+#==================================================#
+
 def ensure_uploads_log_schema():
     """Create/upgrade uploads_log to the expected schema; ensure uniqueness."""
     with sqlite3.connect(DB_NAME) as conn:
@@ -141,12 +200,6 @@ def auto_import_uploads():
     ALLOWED_IMPORT_EXTS = {'csv', 'npy'}
     imported = 0
 
-    def tableize(name: str) -> str:
-        # Stable, safe table name from filename only (not full path)
-        # e.g. "bandgap.csv" -> "bandgap_csv"
-        t = name.replace('.', '_').replace('-', '_').replace(' ', '_')
-        return re.sub(r'[^0-9a-zA-Z_]', '_', t)
-
     with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
         # Track file mtimes to avoid unnecessary re-imports
@@ -174,7 +227,7 @@ def auto_import_uploads():
                 filepath = os.path.join(root, filename)
                 relpath = os.path.relpath(filepath, UPLOAD_FOLDER)
                 mtime = os.path.getmtime(filepath)
-                table_name = tableize(filename)
+                table_name = file_to_table_name(filename)
 
                 # Check etag (mtime)
                 c.execute("SELECT mtime FROM import_etag WHERE relpath=?", (relpath,))
@@ -772,6 +825,60 @@ def public_clips():
     pass
 
     return render_template('clips.html', clips=clips, admin=admin)
+
+#########################################################
+
+@app.route('/view_table/<path:filename>', methods=['GET'])
+def view_table(filename):
+    """
+    Used by the 'View' link in property_detail.html.
+    Accepts 'property/tab/file.csv' and renders the dataset:
+    - Prefer reading the imported SQLite table (created by auto_import_uploads()).
+    - If missing, fall back to reading the file from uploads/ directly.
+    """
+    admin = bool(session.get('admin'))
+    safe_name = os.path.basename(filename)
+    table = tableize_basename(safe_name)
+
+    df = None
+
+    # Try SQLite first
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            df = pd.read_sql_query(f'SELECT * FROM "{table}"', conn)
+    except Exception:
+        # Fallback: read the source file
+        path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        if not os.path.isfile(path):
+            abort(404)
+        ext = (safe_name.rsplit('.', 1)[-1] if '.' in safe_name else '').lower()
+        try:
+            if ext == 'csv':
+                df = pd.read_csv(path)
+            elif ext == 'npy':
+                arr = np.load(path, allow_pickle=True)
+                if isinstance(arr, np.ndarray):
+                    if arr.ndim == 2:
+                        df = pd.DataFrame(arr)
+                    elif arr.ndim == 1 and hasattr(arr.dtype, 'names') and arr.dtype.names:
+                        df = pd.DataFrame(arr.tolist(), columns=list(arr.dtype.names))
+                    else:
+                        df = pd.DataFrame(arr)
+                else:
+                    return "Unsupported NPY structure.", 415
+            else:
+                return f"Unsupported dataset type: {ext}", 415
+        except Exception as e:
+            return f"Failed to open dataset: {e}", 500
+
+    return render_template(
+        'view_table.html',
+        tables=[df.to_html(classes='data', index=False)],
+        titles=getattr(df, 'columns', []),
+        filename=safe_name,
+        imported_table=table,
+        admin=admin
+    )
 
 #########################################################
 
