@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!DOCTYPE html> 
 <html>
 <head>
     <title>SQL Query Tool | Patterns Matter</title>
@@ -15,6 +15,12 @@
             margin-bottom: 1em;
         }
         .return-home:hover { background: #225c44; }
+        .warn-box {
+            margin-top: .75em; padding: .75em;
+            border: 1px solid #c93; background: #fff8e5; border-radius: 6px;
+        }
+        .warn-box label { cursor: pointer; }
+        textarea { width: 90%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     </style>
 </head>
 <body>
@@ -43,19 +49,49 @@
             {% endfor %}
         </ul>
 
-        <form method="post">
-            <label for="sql">Enter SQL SELECT query:</label><br>
-            <textarea id="sql" name="sql" rows="6" style="width:90%;" required>{{ sql }}</textarea>
-            <button type="submit">Run Query</button>
+        <form method="post" id="sql-form">
+            <label for="sql">Enter SQL (supports multiple statements separated by “;”):</label><br>
+            <textarea id="sql" name="sql" rows="10" required>{{ sql }}</textarea>
+
+            <!-- Destructive confirmation (server-driven + client hint) -->
+            <div id="confirm-wrap" class="warn-box" style="display: {{ 'block' if needs_confirm else 'none' }};">
+                <input type="checkbox" id="confirm" name="confirm">
+                <label for="confirm"><b>Are you sure?</b> Your query includes
+                    <code>DROP</code>/<code>DELETE</code>/<code>UPDATE</code>/<code>ALTER</code>/<code>TRUNCATE</code>.
+                </label>
+            </div>
+
+            <div style="margin-top: .8em;">
+                <button type="submit">Run</button>
+            </div>
         </form>
+
         {% if result_html %}
             <h2>Result:</h2>
             {{ result_html|safe }}
         {% endif %}
         {% if error_msg %}
-            <h3 style="color:red;">Error:</h3>
-            <pre>{{ error_msg }}</pre>
+            <h3 style="color:#a00;">Notice:</h3>
+            <pre style="white-space: pre-wrap;">{{ error_msg }}</pre>
         {% endif %}
     </div>
+
+    <script>
+    // Client-side helper: show confirm box if destructive terms detected.
+    (function(){
+        var ta = document.getElementById('sql');
+        var wrap = document.getElementById('confirm-wrap');
+        var re = /\b(drop|delete|update|alter|truncate)\b/i;
+
+        function update() {
+            try {
+                var s = ta.value.replace(/--.*?$/mg, "").replace(/\/\*[\s\S]*?\*\//g, "");
+                wrap.style.display = re.test(s) ? 'block' : ({{ 'true' if needs_confirm else 'false' }}) ? 'block' : 'none';
+            } catch (_) {}
+        }
+        ta && ta.addEventListener('input', update);
+        update();
+    })();
+    </script>
 </body>
 </html>
