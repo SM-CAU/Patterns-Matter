@@ -437,6 +437,23 @@ def fix_uploads_uniqueness():
     
 #########################################################
 
+@app.route("/healthz")
+def healthz():
+    # Must be super fast and always 200 so Fly can mark the machine healthy
+    return "ok", 200
+
+#########################################################
+
+@app.route("/diag/routes")
+def diag_routes():
+    # Lets you confirm which routes are actually registered in prod
+    if not session.get("admin"):
+        abort(403)
+    rules = sorted([str(r) for r in app.url_map.iter_rules()])
+    return jsonify({"routes": rules})
+
+#########################################################
+
 # -- View and import (admin only) --
 @app.route('/materials/<property_name>/<tab>', methods=['GET', 'POST'])
 def property_detail(property_name, tab):
