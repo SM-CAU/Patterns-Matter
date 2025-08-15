@@ -98,35 +98,79 @@ def file_to_table_name(filename: str) -> str:
 #==================================================#
 
 def ensure_uploads_log_schema():
-    """Create/upgrade uploads_log to the expected schema; ensure uniqueness."""
+    """Public catalog (uploads_log) + audit history (uploads_audit) with triggers."""
     with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
-        # Create table if missing (includes UNIQUE on the key)
+
+        # Public catalog (what public pages read)
         c.execute("""
         CREATE TABLE IF NOT EXISTS uploads_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            property   TEXT NOT NULL,
-            tab        TEXT NOT NULL,
-            filename   TEXT NOT NULL,
-            uploaded_at TEXT,
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            property    TEXT NOT NULL,
+            tab         TEXT NOT NULL,      -- 'dataset' | 'results'
+            filename    TEXT NOT NULL,      -- human-visible label
+            uploaded_at TEXT,               -- first/last touch, maintained by app
+            -- Drive-first metadata
+            storage     TEXT,               -- 'drive' | 'local' (legacy)
+            drive_id    TEXT,
+            preview_url TEXT,
+            download_url TEXT,
+            source      TEXT,
+            description TEXT,
             UNIQUE(property, tab, filename)
         )
         """)
-        # Ensure uploaded_at column exists (for older DBs)
-        cols = {row[1] for row in c.execute("PRAGMA table_info(uploads_log)").fetchall()}
-        if "uploaded_at" not in cols:
-            c.execute("ALTER TABLE uploads_log ADD COLUMN uploaded_at TEXT")
-            # Try to migrate from legacy logged_at if it exists
-            try:
-                c.execute("UPDATE uploads_log SET uploaded_at = COALESCE(uploaded_at, logged_at) WHERE uploaded_at IS NULL")
-            except sqlite3.OperationalError:
-                pass  # logged_at may not exist; ignore
 
-        # Ensure a unique index exists even if the table was created long ago
+        # Ensure index exists even on old DBs
         c.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
         ON uploads_log(property, tab, filename)
         """)
+
+        # ---- Audit table
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS uploads_audit (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            property  TEXT NOT NULL,
+            tab       TEXT NOT NULL,
+            filename  TEXT NOT NULL,
+            action    TEXT NOT NULL,   -- add | update | delete
+            at        TEXT NOT NULL
+        )
+        """)
+
+        # Helper to create triggers idempotently
+        def ensure_trigger(name, ddl):
+            c.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?", (name,))
+            if not c.fetchone():
+                c.execute(ddl)
+
+        ensure_trigger("trg_ul_insert_audit", """
+        CREATE TRIGGER trg_ul_insert_audit
+        AFTER INSERT ON uploads_log
+        BEGIN
+          INSERT INTO uploads_audit(property, tab, filename, action, at)
+          VALUES (NEW.property, NEW.tab, NEW.filename, 'add',
+                  COALESCE(NEW.uploaded_at, CURRENT_TIMESTAMP));
+        END;""")
+
+        ensure_trigger("trg_ul_update_audit", """
+        CREATE TRIGGER trg_ul_update_audit
+        AFTER UPDATE ON uploads_log
+        BEGIN
+          INSERT INTO uploads_audit(property, tab, filename, action, at)
+          VALUES (NEW.property, NEW.tab, NEW.filename, 'update',
+                  COALESCE(NEW.uploaded_at, CURRENT_TIMESTAMP));
+        END;""")
+
+        ensure_trigger("trg_ul_delete_audit", """
+        CREATE TRIGGER trg_ul_delete_audit
+        AFTER DELETE ON uploads_log
+        BEGIN
+          INSERT INTO uploads_audit(property, tab, filename, action, at)
+          VALUES (OLD.property, OLD.tab, OLD.filename, 'delete', CURRENT_TIMESTAMP);
+        END;""")
+
         conn.commit()
 
 #==================================================#
@@ -489,38 +533,38 @@ def logout():
 
 #########################################################
 
-# -- Admin-only home page (upload/import/query) --
-@app.route('/admin', methods=['GET', 'POST'])
+# --- Admin Dashboard (history-only) ---
+@app.route('/admin', methods=['GET'])
 def admin_home():
     if not session.get('admin'):
         return redirect(url_for('login'))
 
-    # Get all uploads (materials) from uploads_log
-    uploads = []
+    # Make sure catalog + audit schema exist (triggers are created here too)
+    ensure_uploads_log_schema()
+
+    # Build the history table: when first added, and whether still present publicly
     with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
         c.execute("""
-            SELECT property, tab, filename, uploaded_at
-            FROM uploads_log
-            ORDER BY uploaded_at DESC
+        WITH hist AS (
+          SELECT property, tab, filename,
+                 MIN(CASE WHEN action='add' THEN at END) AS first_added,
+                 MAX(at) AS last_event
+            FROM uploads_audit
+        GROUP BY property, tab, filename
+        )
+        SELECT
+          h.filename AS file_name,
+          COALESCE(h.first_added, h.last_event) AS uploaded_at,
+          CASE WHEN u.rowid IS NULL THEN 'Absent' ELSE 'Present' END AS public_view_status
+        FROM hist h
+        LEFT JOIN uploads_log u
+               ON u.property=h.property AND u.tab=h.tab AND u.filename=h.filename
+        ORDER BY uploaded_at DESC, h.filename;
         """)
-        uploads = c.fetchall()
+        audit_rows = c.fetchall()
 
-    # Get all music clips from the music_clips table
-    music_clips = []
-    try:
-        with sqlite3.connect(DB_NAME) as conn:
-            c = conn.cursor()
-            c.execute("SELECT filename, title, description FROM music_clips ORDER BY rowid DESC")
-            music_clips = c.fetchall()
-    except Exception:
-        music_clips = []
-
-    return render_template(
-        'admin_home.html',
-        uploads=uploads,
-        music_clips=music_clips
-    )
+    return render_template('admin_home.html', audit_rows=audit_rows)
 
 #########################################################
 
@@ -641,10 +685,10 @@ def diag_routes():
 
 #########################################################
 
-# -- View and import (admin only) --
+# -- View and import (admin + Public) --
 @app.route('/materials/<property_name>/<tab>', methods=['GET', 'POST'])
 def property_detail(property_name, tab):
-    # ---- titles / guards ----
+    # Titles / guards
     pretty_titles = {
         'bandgap': 'Band Gap',
         'formation_energy': 'Formation Energy',
@@ -654,99 +698,104 @@ def property_detail(property_name, tab):
     if property_name not in pretty_titles or tab not in ('dataset', 'results'):
         return "Not found.", 404
 
+    ensure_uploads_log_schema()
+
     upload_message = ""
     edit_message = ""
     is_admin = bool(session.get('admin'))
 
-    # ---- admin POST handlers ----
+    # -------- Admin-only: Drive-based upload -----------
     if is_admin and request.method == 'POST':
-        # Inline row edit
-        if 'edit_row' in request.form:
+        if 'add_drive' in request.form:
+            # Form fields (Drive)
+            drive_link = (request.form.get('drive_link') or '').strip()
+            label      = (request.form.get('label') or '').strip()  # human filename label (required)
+            source     = (request.form.get('row_source') or '').strip() if tab == 'dataset' else None
+            desc       = (request.form.get('row_description') or '').strip()
+
+            # Parse Drive ID from link or raw id
+            def _extract_drive_id(link: str):
+                m = re.search(r'/d/([a-zA-Z0-9_-]+)', link) or re.search(r'[?&]id=([a-zA-Z0-9_-]+)', link)
+                if m: return m.group(1)
+                if re.match(r'^[a-zA-Z0-9_-]{10,}$', link): return link
+                return None
+
+            drive_id = _extract_drive_id(drive_link)
+            if not label or not drive_id:
+                upload_message = "❌ Provide a valid Drive link/ID and a label."
+            else:
+                preview_url  = f"https://drive.google.com/file/d/{drive_id}/preview"
+                download_url = f"https://drive.google.com/uc?export=download&id={drive_id}"
+
+                # Upsert into public catalog (dedup by key)
+                with sqlite3.connect(DB_NAME) as conn:
+                    c = conn.cursor()
+                    c.execute("""
+                        INSERT INTO uploads_log
+                            (property, tab, filename, uploaded_at, storage, drive_id, preview_url, download_url, source, description)
+                        VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'drive', ?, ?, ?, ?, ?)
+                        ON CONFLICT(property, tab, filename)
+                        DO UPDATE SET
+                            uploaded_at = CURRENT_TIMESTAMP,
+                            storage='drive', drive_id=excluded.drive_id,
+                            preview_url=excluded.preview_url, download_url=excluded.download_url,
+                            source=excluded.source, description=excluded.description
+                    """, (property_name, tab, label, drive_id, preview_url, download_url, source, desc))
+                    conn.commit()
+                upload_message = f"✅ Added '{label}' from Drive."
+
+        elif 'edit_row' in request.form:
+            # Inline update (source/description)
             row_filename = request.form.get('row_filename') or ''
             safe_row_filename = secure_filename(os.path.basename(row_filename))
             new_desc = (request.form.get('row_description') or '').strip()
-
             with sqlite3.connect(DB_NAME) as conn:
                 c = conn.cursor()
                 if tab == 'dataset':
                     new_source = (request.form.get('row_source') or '').strip()
-                    c.execute(
-                        """
+                    c.execute("""
                         UPDATE uploads_log
-                           SET source = ?, description = ?
-                         WHERE property = ? AND tab = ? AND filename = ?
-                        """,
-                        (new_source, new_desc, property_name, tab, safe_row_filename),
-                    )
+                           SET source=?, description=?, uploaded_at=CURRENT_TIMESTAMP
+                         WHERE property=? AND tab=? AND filename=?""",
+                        (new_source, new_desc, property_name, tab, safe_row_filename))
                 else:
-                    c.execute(
-                        """
+                    c.execute("""
                         UPDATE uploads_log
-                           SET description = ?
-                         WHERE property = ? AND tab = ? AND filename = ?
-                        """,
-                        (new_desc, property_name, tab, safe_row_filename),
-                    )
+                           SET description=?, uploaded_at=CURRENT_TIMESTAMP
+                         WHERE property=? AND tab=? AND filename=?""",
+                        (new_desc, property_name, tab, safe_row_filename))
                 conn.commit()
-
             edit_message = f"Updated info for {safe_row_filename}."
 
-        # New file upload
-        elif 'file' in request.files:
-            f = request.files['file']
-            if not f or f.filename == '':
-                upload_message = "No file selected."
-            else:
-                # Validate extension by tab
-                if tab == 'dataset':
-                    is_allowed = allowed_dataset_file(f.filename)
-                    allowed_types = "CSV or NPY"
-                else:  # results
-                    is_allowed = allowed_results_file(f.filename)
-                    allowed_types = "JPG, PNG, GIF, PDF, or DOCX"
-
-                if not is_allowed:
-                    upload_message = f"File type not allowed. Only {allowed_types} supported."
-                else:
-                    # Save to disk (under /uploads/<property>/<tab>/)
-                    property_folder = os.path.join(app.config['UPLOAD_FOLDER'], property_name, tab)
-                    os.makedirs(property_folder, exist_ok=True)
-                    safe_filename = secure_filename(os.path.basename(f.filename))
-                    filepath = os.path.join(property_folder, safe_filename)
-                    f.save(filepath)
-
-                    # Log to DB (idempotent; no Python datetime)
-                    with sqlite3.connect(DB_NAME) as conn:
-                        c = conn.cursor()
-                        c.execute(
-                            """
-                            INSERT INTO uploads_log (property, tab, filename, uploaded_at)
-                            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                            ON CONFLICT(property, tab, filename)
-                            DO UPDATE SET uploaded_at = CURRENT_TIMESTAMP
-                            """,
-                            (property_name, tab, safe_filename),
-                        )
-                        conn.commit()
-
-                    upload_message = f"File {safe_filename} uploaded for {pretty_titles[property_name]} {tab.title()}!"
-
-    # ---- fetch current uploads (unique per key thanks to UNIQUE index) ----
+    # -------- Fetch current public rows -----------
     with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
-        c.execute(
-            """
+        c.execute("""
             SELECT filename,
-                   COALESCE(source, '')      AS source,
-                   COALESCE(description, '') AS description,
-                   uploaded_at
+                   COALESCE(source,'')      AS source,
+                   COALESCE(description,'') AS description,
+                   uploaded_at,
+                   COALESCE(storage,'local') AS storage,
+                   COALESCE(preview_url,'')  AS preview_url,
+                   COALESCE(download_url,'') AS download_url
               FROM uploads_log
-             WHERE property = ? AND tab = ?
+             WHERE property=? AND tab=?
           ORDER BY uploaded_at DESC, filename
-            """,
-            (property_name, tab),
-        )
-        uploads = c.fetchall()
+        """, (property_name, tab))
+        rows = c.fetchall()
+
+    # Normalize rows for the template
+    uploads = []
+    for fname, source, description, uploaded_at, storage, purl, durl in rows:
+        uploads.append({
+            "filename": fname,
+            "source": source,
+            "description": description,
+            "uploaded_at": uploaded_at,
+            "storage": storage,
+            "preview_url": purl,
+            "download_url": durl,
+        })
 
     return render_template(
         'property_detail.html',
