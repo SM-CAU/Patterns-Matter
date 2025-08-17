@@ -688,7 +688,7 @@ def diag_routes():
 # -- View and import (admin + Public) --
 @app.route('/materials/<property_name>/<tab>', methods=['GET', 'POST'])
 def property_detail(property_name, tab):
-    # Titles / guards
+    # ---- titles / guards ----
     pretty_titles = {
         'bandgap': 'Band Gap',
         'formation_energy': 'Formation Energy',
@@ -698,104 +698,125 @@ def property_detail(property_name, tab):
     if property_name not in pretty_titles or tab not in ('dataset', 'results'):
         return "Not found.", 404
 
-    ensure_uploads_log_schema()
-
     upload_message = ""
     edit_message = ""
     is_admin = bool(session.get('admin'))
 
-    # -------- Admin-only: Drive-based upload -----------
+    # Helper: parse Google Drive link or raw id
+    def _extract_drive_id(link_or_id: str):
+        s = (link_or_id or "").strip()
+        m = re.search(r"/d/([a-zA-Z0-9_-]+)", s)
+        if m: return m.group(1)
+        m = re.search(r"[?&]id=([a-zA-Z0-9_-]+)", s)
+        if m: return m.group(1)
+        if re.match(r"^[a-zA-Z0-9_-]{10,}$", s):
+            return s
+        return None
+
+    # ---- admin POST handlers ----
     if is_admin and request.method == 'POST':
-        if 'add_drive' in request.form:
-            # Form fields (Drive)
-            drive_link = (request.form.get('drive_link') or '').strip()
-            label      = (request.form.get('label') or '').strip()  # human filename label (required)
-            source     = (request.form.get('row_source') or '').strip() if tab == 'dataset' else None
-            desc       = (request.form.get('row_description') or '').strip()
+        # 1) Add Drive entry
+        if request.form.get('add_drive'):
+            drive_link = request.form.get('drive_link', '').strip()
+            label = request.form.get('label', '').strip()
+            new_source = (request.form.get('row_source') or '').strip() if tab == 'dataset' else None
+            new_desc = (request.form.get('row_description') or '').strip()
 
-            # Parse Drive ID from link or raw id
-            def _extract_drive_id(link: str):
-                m = re.search(r'/d/([a-zA-Z0-9_-]+)', link) or re.search(r'[?&]id=([a-zA-Z0-9_-]+)', link)
-                if m: return m.group(1)
-                if re.match(r'^[a-zA-Z0-9_-]{10,}$', link): return link
-                return None
-
-            drive_id = _extract_drive_id(drive_link)
-            if not label or not drive_id:
-                upload_message = "❌ Provide a valid Drive link/ID and a label."
+            # Basic ext check from label to keep tabs consistent
+            ext = (label.rsplit('.', 1)[-1].lower() if '.' in label else '')
+            if tab == 'dataset' and ext not in ALLOWED_DATASET_EXTENSIONS:
+                upload_message = f"Label must end with .csv or .npy for datasets."
+            elif tab == 'results' and ext not in ALLOWED_RESULTS_EXTENSIONS:
+                upload_message = f"Label must be one of: {', '.join(sorted(ALLOWED_RESULTS_EXTENSIONS))}."
             else:
-                preview_url  = f"https://drive.google.com/file/d/{drive_id}/preview"
-                download_url = f"https://drive.google.com/uc?export=download&id={drive_id}"
+                file_id = _extract_drive_id(drive_link)
+                if not file_id:
+                    upload_message = "Invalid Google Drive link or ID."
+                else:
+                    preview_url = f"https://drive.google.com/file/d/{file_id}/preview"
+                    download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+                    # Upsert into uploads_log (Drive-first)
+                    with sqlite3.connect(DB_NAME) as conn:
+                        c = conn.cursor()
+                        c.execute(
+                            """
+                            INSERT INTO uploads_log
+                                (property, tab, filename, uploaded_at, storage, drive_id, preview_url, download_url, source, description)
+                            VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'drive', ?, ?, ?, ?, ?)
+                            ON CONFLICT(property, tab, filename)
+                            DO UPDATE SET
+                                uploaded_at = CURRENT_TIMESTAMP,
+                                storage = 'drive',
+                                drive_id = excluded.drive_id,
+                                preview_url = excluded.preview_url,
+                                download_url = excluded.download_url,
+                                source = COALESCE(excluded.source, uploads_log.source),
+                                description = COALESCE(excluded.description, uploads_log.description)
+                            """,
+                            (property_name, tab, label, file_id, preview_url, download_url, new_source, new_desc),
+                        )
+                        conn.commit()
+                    upload_message = f"Added Drive item '{label}'."
 
-                # Upsert into public catalog (dedup by key)
-                with sqlite3.connect(DB_NAME) as conn:
-                    c = conn.cursor()
-                    c.execute("""
-                        INSERT INTO uploads_log
-                            (property, tab, filename, uploaded_at, storage, drive_id, preview_url, download_url, source, description)
-                        VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'drive', ?, ?, ?, ?, ?)
-                        ON CONFLICT(property, tab, filename)
-                        DO UPDATE SET
-                            uploaded_at = CURRENT_TIMESTAMP,
-                            storage='drive', drive_id=excluded.drive_id,
-                            preview_url=excluded.preview_url, download_url=excluded.download_url,
-                            source=excluded.source, description=excluded.description
-                    """, (property_name, tab, label, drive_id, preview_url, download_url, source, desc))
-                    conn.commit()
-                upload_message = f"✅ Added '{label}' from Drive."
-
+        # 2) Inline edit (source/description)
         elif 'edit_row' in request.form:
-            # Inline update (source/description)
-            row_filename = request.form.get('row_filename') or ''
-            safe_row_filename = secure_filename(os.path.basename(row_filename))
+            row_filename = (request.form.get('row_filename') or '').strip()
             new_desc = (request.form.get('row_description') or '').strip()
             with sqlite3.connect(DB_NAME) as conn:
                 c = conn.cursor()
                 if tab == 'dataset':
                     new_source = (request.form.get('row_source') or '').strip()
-                    c.execute("""
+                    c.execute(
+                        """
                         UPDATE uploads_log
-                           SET source=?, description=?, uploaded_at=CURRENT_TIMESTAMP
-                         WHERE property=? AND tab=? AND filename=?""",
-                        (new_source, new_desc, property_name, tab, safe_row_filename))
+                           SET source = ?, description = ?
+                         WHERE property = ? AND tab = ? AND filename = ?
+                        """,
+                        (new_source, new_desc, property_name, tab, row_filename),
+                    )
                 else:
-                    c.execute("""
+                    c.execute(
+                        """
                         UPDATE uploads_log
-                           SET description=?, uploaded_at=CURRENT_TIMESTAMP
-                         WHERE property=? AND tab=? AND filename=?""",
-                        (new_desc, property_name, tab, safe_row_filename))
+                           SET description = ?
+                         WHERE property = ? AND tab = ? AND filename = ?
+                        """,
+                        (new_desc, property_name, tab, row_filename),
+                    )
                 conn.commit()
-            edit_message = f"Updated info for {safe_row_filename}."
+            edit_message = f"Updated info for {row_filename}."
 
-    # -------- Fetch current public rows -----------
+    # ---- fetch current uploads (public catalog) ----
     with sqlite3.connect(DB_NAME) as conn:
+        conn.row_factory = sqlite3.Row
         c = conn.cursor()
-        c.execute("""
+        c.execute(
+            """
             SELECT filename,
                    COALESCE(source,'')      AS source,
                    COALESCE(description,'') AS description,
                    uploaded_at,
                    COALESCE(storage,'local') AS storage,
-                   COALESCE(preview_url,'')  AS preview_url,
-                   COALESCE(download_url,'') AS download_url
+                   preview_url,
+                   download_url
               FROM uploads_log
-             WHERE property=? AND tab=?
+             WHERE property = ? AND tab = ?
           ORDER BY uploaded_at DESC, filename
-        """, (property_name, tab))
-        rows = c.fetchall()
+            """,
+            (property_name, tab),
+        )
+        uploads = c.fetchall()
 
-    # Normalize rows for the template
-    uploads = []
-    for fname, source, description, uploaded_at, storage, purl, durl in rows:
-        uploads.append({
-            "filename": fname,
-            "source": source,
-            "description": description,
-            "uploaded_at": uploaded_at,
-            "storage": storage,
-            "preview_url": purl,
-            "download_url": durl,
-        })
+    # Map local dataset filenames to SQL table names (for "View" link)
+    table_map = {}
+    if tab == 'dataset':
+        table_map = {}
+        for row in uploads:
+            storage = (row['storage'] or 'local')
+            if storage != 'drive':
+                fname = row['filename']
+                if fname and (fname.endswith('.csv') or fname.endswith('.npy')):
+                    table_map[fname] = file_to_table_name(fname)
 
     return render_template(
         'property_detail.html',
@@ -806,6 +827,7 @@ def property_detail(property_name, tab):
         upload_message=upload_message,
         edit_message=edit_message,
         admin=is_admin,
+        table_map=table_map,
     )
     
 #########################################################
