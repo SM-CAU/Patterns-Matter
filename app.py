@@ -686,6 +686,7 @@ def diag_routes():
 #########################################################
 
 # -- View and import (admin + Public) --
+# -- View and import (admin + Public) --
 @app.route('/materials/<property_name>/<tab>', methods=['GET', 'POST'])
 def property_detail(property_name, tab):
     # ---- titles / guards ----
@@ -713,6 +714,12 @@ def property_detail(property_name, tab):
             return s
         return None
 
+    # Make sure schema exists (columns like storage/preview_url/etc.)
+    try:
+        ensure_uploads_log_schema()
+    except Exception as e:
+        app.logger.warning("ensure_uploads_log_schema: %s", e)
+
     # ---- admin POST handlers ----
     if is_admin and request.method == 'POST':
         # 1) Add Drive entry
@@ -725,7 +732,7 @@ def property_detail(property_name, tab):
             # Basic ext check from label to keep tabs consistent
             ext = (label.rsplit('.', 1)[-1].lower() if '.' in label else '')
             if tab == 'dataset' and ext not in ALLOWED_DATASET_EXTENSIONS:
-                upload_message = f"Label must end with .csv or .npy for datasets."
+                upload_message = "Label must end with .csv or .npy for datasets."
             elif tab == 'results' and ext not in ALLOWED_RESULTS_EXTENSIONS:
                 upload_message = f"Label must be one of: {', '.join(sorted(ALLOWED_RESULTS_EXTENSIONS))}."
             else:
@@ -735,22 +742,23 @@ def property_detail(property_name, tab):
                 else:
                     preview_url = f"https://drive.google.com/file/d/{file_id}/preview"
                     download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                    # Upsert into uploads_log (Drive-first)
                     with sqlite3.connect(DB_NAME) as conn:
                         c = conn.cursor()
                         c.execute(
                             """
                             INSERT INTO uploads_log
-                                (property, tab, filename, uploaded_at, storage, drive_id, preview_url, download_url, source, description)
-                            VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'drive', ?, ?, ?, ?, ?)
+                                (property, tab, filename, uploaded_at,
+                                 storage, drive_id, preview_url, download_url, source, description)
+                            VALUES (?, ?, ?, CURRENT_TIMESTAMP,
+                                    'drive', ?, ?, ?, ?, ?)
                             ON CONFLICT(property, tab, filename)
                             DO UPDATE SET
                                 uploaded_at = CURRENT_TIMESTAMP,
-                                storage = 'drive',
-                                drive_id = excluded.drive_id,
+                                storage     = 'drive',
+                                drive_id    = excluded.drive_id,
                                 preview_url = excluded.preview_url,
-                                download_url = excluded.download_url,
-                                source = COALESCE(excluded.source, uploads_log.source),
+                                download_url= excluded.download_url,
+                                source      = COALESCE(excluded.source, uploads_log.source),
                                 description = COALESCE(excluded.description, uploads_log.description)
                             """,
                             (property_name, tab, label, file_id, preview_url, download_url, new_source, new_desc),
@@ -786,36 +794,35 @@ def property_detail(property_name, tab):
                 conn.commit()
             edit_message = f"Updated info for {row_filename}."
 
-    # ---- fetch current uploads (public catalog) ----
+    # ---- fetch current uploads as plain dicts (so Jinja `row.filename` works) ----
     with sqlite3.connect(DB_NAME) as conn:
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
         c.execute(
             """
-            SELECT filename,
-                   COALESCE(source,'')      AS source,
-                   COALESCE(description,'') AS description,
-                   uploaded_at,
-                   COALESCE(storage,'local') AS storage,
-                   preview_url,
-                   download_url
+            SELECT
+                filename,
+                COALESCE(source,'')        AS source,
+                COALESCE(description,'')   AS description,
+                uploaded_at,
+                COALESCE(storage,'local')  AS storage,
+                COALESCE(preview_url,'')   AS preview_url,
+                COALESCE(download_url,'')  AS download_url
               FROM uploads_log
              WHERE property = ? AND tab = ?
           ORDER BY uploaded_at DESC, filename
             """,
             (property_name, tab),
         )
-        uploads = c.fetchall()
+        uploads = [dict(r) for r in c.fetchall()]
 
-    # Map local dataset filenames to SQL table names (for "View" link)
+    # Map local dataset filenames to SQL table names (for potential view links)
     table_map = {}
     if tab == 'dataset':
-        table_map = {}
         for row in uploads:
-            storage = (row['storage'] or 'local')
-            if storage != 'drive':
-                fname = row['filename']
-                if fname and (fname.endswith('.csv') or fname.endswith('.npy')):
+            if row.get('storage') != 'drive':
+                fname = row.get('filename', '')
+                if fname.endswith('.csv') or fname.endswith('.npy'):
                     table_map[fname] = file_to_table_name(fname)
 
     return render_template(
@@ -829,6 +836,7 @@ def property_detail(property_name, tab):
         admin=is_admin,
         table_map=table_map,
     )
+
     
 #########################################################
 
