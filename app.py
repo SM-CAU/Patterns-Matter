@@ -10,6 +10,15 @@ from werkzeug.utils import secure_filename
 import datetime
 import re
 import csv
+<<<<<<< HEAD
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+import io, base64, zipfile
+from typing import List, Dict, Optional
+
+=======
+>>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
 
 # ========== SETTINGS ==========
 
@@ -25,6 +34,11 @@ app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.secret_key = 'IronMa1deN!'
 
+<<<<<<< HEAD
+GDRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+=======
+>>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
 # ---------- Utility Functions ----------
 
 def allowed_dataset_file(filename):
@@ -38,6 +52,135 @@ def allowed_music_file(filename):
 
 # ========== Helper Functions ========== #
 
+<<<<<<< HEAD
+def get_drive_service():
+    """
+    Build a Drive v3 service from a Service Account.
+    Reads either:
+      - GDRIVE_SA_JSON: absolute path to JSON in the VM
+      - GDRIVE_SA_JSON_BASE64: base64-encoded JSON content
+    Requires env: GDRIVE_ROOT_FOLDER_ID (top folder shared with SA).
+    """
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+    except Exception as ie:
+        raise RuntimeError(
+            "Google API libraries not installed. "
+            "Add to requirements.txt: google-api-python-client google-auth google-auth-httplib2"
+        ) from ie
+
+    scopes = ["https://www.googleapis.com/auth/drive"]
+    json_path = os.environ.get("GDRIVE_SA_JSON")
+    json_b64 = os.environ.get("GDRIVE_SA_JSON_BASE64")
+
+    if json_path and os.path.isfile(json_path):
+        creds = service_account.Credentials.from_service_account_file(json_path, scopes=scopes)
+    elif json_b64:
+        info = json.loads(base64.b64decode(json_b64).decode("utf-8"))
+        creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
+    else:
+        raise RuntimeError("Missing service account: set GDRIVE_SA_JSON or GDRIVE_SA_JSON_BASE64.")
+
+    try:
+        service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        return service
+    except Exception as e:
+        raise RuntimeError(f"Failed to build Drive service: {e}")
+
+def _drive_extract_id(link_or_id: str) -> Optional[str]:
+    """
+    Accepts a full Drive URL (file or folder) or a raw ID and returns the ID.
+    Handles:
+      - https://drive.google.com/file/d/<ID>/view…
+      - https://drive.google.com/drive/folders/<ID>
+      - …?id=<ID>
+      - raw <ID>
+    """
+    s = (link_or_id or "").strip()
+    if not s:
+        return None
+    m = re.search(r"/file/d/([A-Za-z0-9_-]+)", s)
+    if m: return m.group(1)
+    m = re.search(r"/folders/([A-Za-z0-9_-]+)", s)
+    if m: return m.group(1)
+    m = re.search(r"[?&]id=([A-Za-z0-9_-]+)", s)
+    if m: return m.group(1)
+    # raw-ish ID
+    if re.match(r"^[A-Za-z0-9_-]{10,}$", s):  # loose check
+        return s
+    return None
+
+def drive_find_or_create_folder(service, parent_id: str, name: str) -> str:
+    """Find a folder by name under parent; create if missing. Returns folder ID."""
+    q = (
+        f"mimeType='application/vnd.google-apps.folder' "
+        f"and name='{name.replace(\"'\", \"\\'\")}' "
+        f"and '{parent_id}' in parents and trashed=false"
+    )
+    res = service.files().list(q=q, fields="files(id,name)", pageSize=1).execute()
+    items = res.get("files", [])
+    if items:
+        return items[0]["id"]
+    meta = {
+        "name": name,
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [parent_id],
+    }
+    created = service.files().create(body=meta, fields="id").execute()
+    return created["id"]
+
+def drive_ensure_property_tab_folder(service, root_folder_id: str, prop: str, tab: str) -> str:
+    """
+    Ensures a structure: <root>/<prop>/<tab> exists, returns final folder ID.
+    """
+    prop_id = drive_find_or_create_folder(service, root_folder_id, prop)
+    tab_id = drive_find_or_create_folder(service, prop_id, tab)
+    return tab_id
+
+def drive_list_folder_files(service, folder_id: str) -> List[Dict]:
+    """
+    List non-trashed files (id,name,mimeType) directly under folder_id.
+    We rely on filename extension for filtering by tab.
+    """
+    items = []
+    page_token = None
+    while True:
+        res = service.files().list(
+            q=f"'{folder_id}' in parents and trashed=false",
+            fields="nextPageToken, files(id,name,mimeType)",
+            pageSize=1000,
+            pageToken=page_token
+        ).execute()
+        items.extend(res.get("files", []))
+        page_token = res.get("nextPageToken")
+        if not page_token:
+            break
+    return items
+
+def drive_upload_bytes(service, folder_id: str, filename: str, data: bytes) -> str:
+    """Upload a new file into folder_id. Returns file ID."""
+    from googleapiclient.http import MediaIoBaseUpload
+    media = MediaIoBaseUpload(io.BytesIO(data), mimetype="application/octet-stream", resumable=False)
+    body = {"name": filename, "parents": [folder_id]}
+    created = service.files().create(body=body, media_body=media, fields="id").execute()
+    return created["id"]
+
+def _ext_ok_for_tab(filename: str, tab: str) -> bool:
+    ext = (filename.rsplit(".", 1)[-1].lower() if "." in filename else "")
+    if tab == "dataset":
+        return ext in ALLOWED_DATASET_EXTENSIONS
+    return ext in ALLOWED_RESULTS_EXTENSIONS
+
+def _drive_urls(file_id: str) -> (str, str):
+    preview = f"https://drive.google.com/file/d/{file_id}/preview"
+    download = f"https://drive.google.com/uc?export=download&id={file_id}"
+    return preview, download
+
+#==================================================#
+
+=======
+>>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
 _SQLITE_RESERVED_PREFIXES = ("sqlite_",)
 
 def tableize_basename(name: str) -> str:
@@ -97,6 +240,80 @@ def file_to_table_name(filename: str) -> str:
 
 #==================================================#
 
+<<<<<<< HEAD
+# Google Drive integration using service account creds
+
+def drive():
+    """Build a Drive service using service-account creds from env."""
+    sa_path = os.environ.get("GDRIVE_SA_JSON", "").strip()
+    sa_b64 = os.environ.get("GDRIVE_SA_JSON_BASE64", "").strip()
+    if sa_path and os.path.isfile(sa_path):
+        creds = Credentials.from_service_account_file(sa_path, scopes=GDRIVE_SCOPES)
+    elif sa_b64:
+        import base64, json, tempfile
+        data = json.loads(base64.b64decode(sa_b64).decode("utf-8"))
+        creds = Credentials.from_service_account_info(data, scopes=GDRIVE_SCOPES)
+    else:
+        raise RuntimeError("No service account credentials provided (GDRIVE_SA_JSON or GDRIVE_SA_JSON_BASE64).")
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+def make_file_public(file_id: str):
+    """Ensure the file is readable by 'anyone with the link'."""
+    svc = drive()
+    try:
+        svc.permissions().create(
+            fileId=file_id,
+            body={"role": "reader", "type": "anyone"},
+            fields="id",
+        ).execute()
+    except Exception:
+        # If permission already exists, ignore.
+        pass
+
+def drive_links(file_id: str):
+    """Return (preview_url, download_url)."""
+    return (f"https://drive.google.com/file/d/{file_id}/preview",
+            f"https://drive.google.com/uc?export=download&id={file_id}")
+
+def _is_folder(item): 
+    return item.get("mimeType") == "application/vnd.google-apps.folder"
+
+def _drive_list_children(parent_id: str):
+    """Yield children of a Drive folder."""
+    svc = drive()
+    q = f"'{parent_id}' in parents and trashed=false"
+    token = None
+    while True:
+        resp = svc.files().list(
+            q=q, spaces="drive",
+            fields="nextPageToken, files(id,name,mimeType,modifiedTime)",
+            pageToken=token, pageSize=1000).execute()
+        for f in resp.get("files", []):
+            yield f
+        token = resp.get("nextPageToken")
+        if not token:
+            break
+
+def _find_child_by_name(parent_id: str, name: str):
+    for f in _drive_list_children(parent_id):
+        if f.get("name") == name:
+            return f
+    return None
+
+def _ensure_folder(parent_id: str, name: str):
+    """Find or create a subfolder."""
+    svc = drive()
+    existing = _find_child_by_name(parent_id, name)
+    if existing and _is_folder(existing):
+        return existing["id"]
+    meta = {"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]}
+    created = svc.files().create(body=meta, fields="id").execute()
+    return created["id"]
+
+#==================================================#
+
+=======
+>>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
 def ensure_uploads_log_schema():
     """Public catalog (uploads_log) + audit history (uploads_audit) with triggers."""
     with sqlite3.connect(DB_NAME) as conn:
@@ -331,6 +548,17 @@ def _run_startup_tasks():
             ensure_uploads_log_schema()   # if you have this helper; otherwise drop it
         except Exception as e:
             app.logger.warning("ensure_uploads_log_schema skipped: %s", e)
+<<<<<<< HEAD
+        # try:
+        #     auto_import_uploads()
+        # except Exception as e:
+        #     app.logger.warning("auto_import_uploads skipped: %s", e)
+        # try:
+        #     auto_log_material_files()
+        # except Exception as e:
+        #     app.logger.warning("auto_log_material_files skipped: %s", e)
+            
+=======
         try:
             auto_import_uploads()
         except Exception as e:
@@ -339,6 +567,7 @@ def _run_startup_tasks():
             auto_log_material_files()
         except Exception as e:
             app.logger.warning("auto_log_material_files skipped: %s", e)
+>>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
         _startup_done = True
 
 @app.before_request
@@ -685,7 +914,11 @@ def diag_routes():
 
 #########################################################
 
+<<<<<<< HEAD
+# -- View and import (admin + public, Drive-only adds) --
+=======
 # -- View and import (admin + Public) --
+>>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
 # -- View and import (admin + Public) --
 @app.route('/materials/<property_name>/<tab>', methods=['GET', 'POST'])
 def property_detail(property_name, tab):
@@ -703,6 +936,190 @@ def property_detail(property_name, tab):
     edit_message = ""
     is_admin = bool(session.get('admin'))
 
+<<<<<<< HEAD
+    # ---- admin POST handlers ----
+    if is_admin and request.method == 'POST':
+        try:
+            # 0) Ensure storage columns exist (for upgraded DBs)
+            try:
+                with sqlite3.connect(DB_NAME) as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT storage, drive_id, preview_url, download_url FROM uploads_log LIMIT 1")
+            except Exception:
+                with sqlite3.connect(DB_NAME) as conn:
+                    cur = conn.cursor()
+                    cur.execute("ALTER TABLE uploads_log ADD COLUMN storage TEXT")
+                    cur.execute("ALTER TABLE uploads_log ADD COLUMN drive_id TEXT")
+                    cur.execute("ALTER TABLE uploads_log ADD COLUMN preview_url TEXT")
+                    cur.execute("ALTER TABLE uploads_log ADD COLUMN download_url TEXT")
+                    conn.commit()
+
+            # 1) Add a single Drive file by link/ID
+            if request.form.get('add_drive'):
+                drive_link = request.form.get('drive_link', '').strip()
+                label = request.form.get('label', '').strip()
+                new_source = (request.form.get('row_source') or '').strip() if tab == 'dataset' else None
+                new_desc = (request.form.get('row_description') or '').strip()
+
+                ext = (label.rsplit('.', 1)[-1].lower() if '.' in label else '')
+                if not _ext_ok_for_tab(label, tab):
+                    if tab == 'dataset':
+                        upload_message = "Label must end with .csv or .npy for datasets."
+                    else:
+                        upload_message = f"Label must end with one of: {', '.join(sorted(ALLOWED_RESULTS_EXTENSIONS))}."
+                else:
+                    file_id = _drive_extract_id(drive_link)
+                    if not file_id:
+                        upload_message = "Invalid Google Drive link or ID."
+                    else:
+                        preview_url, download_url = _drive_urls(file_id)
+                        with sqlite3.connect(DB_NAME) as conn:
+                            c = conn.cursor()
+                            c.execute(
+                                """
+                                INSERT INTO uploads_log
+                                   (property, tab, filename, uploaded_at, storage, drive_id, preview_url, download_url, source, description)
+                                VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'drive', ?, ?, ?, ?, ?)
+                                ON CONFLICT(property, tab, filename)
+                                DO UPDATE SET
+                                   uploaded_at = CURRENT_TIMESTAMP,
+                                   storage = 'drive',
+                                   drive_id = excluded.drive_id,
+                                   preview_url = excluded.preview_url,
+                                   download_url = excluded.download_url,
+                                   source = COALESCE(excluded.source, uploads_log.source),
+                                   description = COALESCE(excluded.description, uploads_log.description)
+                                """,
+                                (property_name, tab, label, file_id, preview_url, download_url, new_source, new_desc),
+                            )
+                            conn.commit()
+                        upload_message = f"Added Drive item '{label}'."
+
+            # 2) Link a Drive FOLDER → import all allowed files
+            elif request.form.get('link_folder'):
+                folder_link = request.form.get('drive_folder_link', '').strip()
+                folder_id = _drive_extract_id(folder_link)
+                if not folder_id:
+                    upload_message = "Invalid Drive folder link or ID."
+                else:
+                    service = get_drive_service()
+                    # list files and import those with allowed extensions for this tab
+                    files = drive_list_folder_files(service, folder_id)
+                    imported = 0
+                    with sqlite3.connect(DB_NAME) as conn:
+                        c = conn.cursor()
+                        for f in files:
+                            name = f.get("name") or ""
+                            if not _ext_ok_for_tab(name, tab):
+                                continue
+                            fid = f["id"]
+                            preview_url, download_url = _drive_urls(fid)
+                            c.execute(
+                                """
+                                INSERT INTO uploads_log
+                                   (property, tab, filename, uploaded_at, storage, drive_id, preview_url, download_url)
+                                VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'drive', ?, ?, ?)
+                                ON CONFLICT(property, tab, filename)
+                                DO UPDATE SET
+                                   uploaded_at = CURRENT_TIMESTAMP,
+                                   storage = 'drive',
+                                   drive_id = excluded.drive_id,
+                                   preview_url = excluded.preview_url,
+                                   download_url = excluded.download_url
+                                """,
+                                (property_name, tab, name, fid, preview_url, download_url),
+                            )
+                            imported += 1
+                        conn.commit()
+                    upload_message = f"Linked folder: imported {imported} item(s)."
+
+            # 3) Upload a ZIP → push contents to Drive <root>/<property>/<tab> → import
+            elif request.form.get('zip_upload'):
+                if 'zipfile' not in request.files or request.files['zipfile'].filename == '':
+                    upload_message = "No ZIP file selected."
+                else:
+                    zf = request.files['zipfile']
+                    try:
+                        root_id = os.environ.get("GDRIVE_ROOT_FOLDER_ID", "").strip()
+                        if not root_id:
+                            raise RuntimeError("GDRIVE_ROOT_FOLDER_ID not set.")
+                        service = get_drive_service()
+                        target_folder_id = drive_ensure_property_tab_folder(service, root_id, property_name, tab)
+
+                        data = zf.read()
+                        z = zipfile.ZipFile(io.BytesIO(data))
+                        uploaded = 0
+
+                        # Upload allowed files only
+                        with sqlite3.connect(DB_NAME) as conn:
+                            c = conn.cursor()
+                            for info in z.infolist():
+                                if info.is_dir():
+                                    continue
+                                # we only want the basename to be the label/filename
+                                base = os.path.basename(info.filename)
+                                if not base:
+                                    continue
+                                if not _ext_ok_for_tab(base, tab):
+                                    continue
+                                file_bytes = z.read(info)
+                                fid = drive_upload_bytes(service, target_folder_id, base, file_bytes)
+                                preview_url, download_url = _drive_urls(fid)
+                                c.execute(
+                                    """
+                                    INSERT INTO uploads_log
+                                       (property, tab, filename, uploaded_at, storage, drive_id, preview_url, download_url)
+                                    VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'drive', ?, ?, ?)
+                                    ON CONFLICT(property, tab, filename)
+                                    DO UPDATE SET
+                                       uploaded_at = CURRENT_TIMESTAMP,
+                                       storage = 'drive',
+                                       drive_id = excluded.drive_id,
+                                       preview_url = excluded.preview_url,
+                                       download_url = excluded.download_url
+                                    """,
+                                    (property_name, tab, base, fid, preview_url, download_url),
+                                )
+                                uploaded += 1
+                            conn.commit()
+
+                        upload_message = f"Uploaded {uploaded} file(s) from ZIP to Drive."
+                    except Exception as e:
+                        upload_message = f"ZIP upload failed: {e}"
+
+            # 4) Inline edit (source/description) – unchanged
+            elif 'edit_row' in request.form:
+                row_filename = (request.form.get('row_filename') or '').strip()
+                new_desc = (request.form.get('row_description') or '').strip()
+                with sqlite3.connect(DB_NAME) as conn:
+                    c = conn.cursor()
+                    if tab == 'dataset':
+                        new_source = (request.form.get('row_source') or '').strip()
+                        c.execute(
+                            """
+                            UPDATE uploads_log
+                               SET source = ?, description = ?
+                             WHERE property = ? AND tab = ? AND filename = ?
+                            """,
+                            (new_source, new_desc, property_name, tab, row_filename),
+                        )
+                    else:
+                        c.execute(
+                            """
+                            UPDATE uploads_log
+                               SET description = ?
+                             WHERE property = ? AND tab = ? AND filename = ?
+                            """,
+                            (new_desc, property_name, tab, row_filename),
+                        )
+                    conn.commit()
+                edit_message = f"Updated info for {row_filename}."
+
+        except Exception as e:
+            upload_message = f"Error: {e}"
+
+    # ---- fetch current uploads (public catalog) ----
+=======
     # Helper: parse Google Drive link or raw id
     def _extract_drive_id(link_or_id: str):
         s = (link_or_id or "").strip()
@@ -795,11 +1212,21 @@ def property_detail(property_name, tab):
             edit_message = f"Updated info for {row_filename}."
 
     # ---- fetch current uploads as plain dicts (so Jinja `row.filename` works) ----
+>>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
     with sqlite3.connect(DB_NAME) as conn:
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
         c.execute(
             """
+<<<<<<< HEAD
+            SELECT filename,
+                   COALESCE(source,'')      AS source,
+                   COALESCE(description,'') AS description,
+                   uploaded_at,
+                   COALESCE(storage,'local') AS storage,
+                   preview_url,
+                   download_url
+=======
             SELECT
                 filename,
                 COALESCE(source,'')        AS source,
@@ -808,12 +1235,24 @@ def property_detail(property_name, tab):
                 COALESCE(storage,'local')  AS storage,
                 COALESCE(preview_url,'')   AS preview_url,
                 COALESCE(download_url,'')  AS download_url
+>>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
               FROM uploads_log
              WHERE property = ? AND tab = ?
           ORDER BY uploaded_at DESC, filename
             """,
             (property_name, tab),
         )
+<<<<<<< HEAD
+        uploads = c.fetchall()
+
+    # Map local dataset filenames to SQL table names (for old/local files)
+    table_map = {}
+    if tab == 'dataset':
+        for row in uploads:
+            if (row['storage'] or 'local') != 'drive':
+                fname = row['filename']
+                if fname and (fname.endswith('.csv') or fname.endswith('.npy')):
+=======
         uploads = [dict(r) for r in c.fetchall()]
 
     # Map local dataset filenames to SQL table names (for potential view links)
@@ -823,6 +1262,7 @@ def property_detail(property_name, tab):
             if row.get('storage') != 'drive':
                 fname = row.get('filename', '')
                 if fname.endswith('.csv') or fname.endswith('.npy'):
+>>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
                     table_map[fname] = file_to_table_name(fname)
 
     return render_template(
@@ -836,7 +1276,10 @@ def property_detail(property_name, tab):
         admin=is_admin,
         table_map=table_map,
     )
+<<<<<<< HEAD
+=======
 
+>>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
     
 #########################################################
 

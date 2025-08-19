@@ -1,0 +1,15 @@
+# Secrets / creds
+credentials.json
+token.json
+
+# Key/cert files
+*.pem
+*.p12
+*.key
+*.crt
+
+patterns-matter.db
+uploads/
+__pycache__/
+*.pyc
+.env
