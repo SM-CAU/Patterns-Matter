@@ -14,12 +14,6 @@ import csv
 import io, base64, zipfile
 from typing import List, Dict, Optional
 
-
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-
-
 # ========== SETTINGS ==========
 
 UPLOAD_FOLDER = 'uploads'
@@ -57,9 +51,11 @@ def get_drive_service():
       - GDRIVE_SA_JSON_BASE64: base64-encoded JSON content
     Requires env: GDRIVE_ROOT_FOLDER_ID (top folder shared with SA).
     """
+    # Lazy imports so the app can boot even if libs aren't installed
     try:
         from google.oauth2 import service_account
         from googleapiclient.discovery import build
+        import json, base64
     except Exception as ie:
         raise RuntimeError(
             "Google API libraries not installed. "
@@ -68,21 +64,27 @@ def get_drive_service():
 
     scopes = ["https://www.googleapis.com/auth/drive"]
     json_path = os.environ.get("GDRIVE_SA_JSON")
-    json_b64 = os.environ.get("GDRIVE_SA_JSON_BASE64")
+    json_b64  = os.environ.get("GDRIVE_SA_JSON_BASE64")
 
     if json_path and os.path.isfile(json_path):
         creds = service_account.Credentials.from_service_account_file(json_path, scopes=scopes)
     elif json_b64:
-        info = json.loads(base64.b64decode(json_b64).decode("utf-8"))
+        try:
+            info = json.loads(base64.b64decode(json_b64).decode("utf-8"))
+        except Exception as e:
+            raise RuntimeError("GDRIVE_SA_JSON_BASE64 is not valid base64 JSON.") from e
         creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
     else:
         raise RuntimeError("Missing service account: set GDRIVE_SA_JSON or GDRIVE_SA_JSON_BASE64.")
 
+    # Build the Drive client (handle older client versions without cache_discovery kw)
     try:
-        service = build("drive", "v3", credentials=creds, cache_discovery=False)
-        return service
+        return build("drive", "v3", credentials=creds, cache_discovery=False)
+    except TypeError:
+        return build("drive", "v3", credentials=creds)
     except Exception as e:
         raise RuntimeError(f"Failed to build Drive service: {e}")
+
 
 def _drive_extract_id(link_or_id: str) -> Optional[str]:
     """

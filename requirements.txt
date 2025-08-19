@@ -12,10 +12,10 @@ pytz==2025.2
 six==1.17.0
 tzdata==2025.2
 Werkzeug==3.1.3
-
 gunicorn==21.2.0
+
 google-api-python-client
 google-auth
 google-auth-httplib2
-gunicorn==21.2.0
+
 
