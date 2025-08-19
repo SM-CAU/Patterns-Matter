@@ -179,7 +179,6 @@ def _drive_urls(file_id: str) -> (str, str):
     preview = f"https://drive.google.com/file/d/{file_id}/preview"
     download = f"https://drive.google.com/uc?export=download&id={file_id}"
     return preview, download
-
 #==================================================#
 
 _SQLITE_RESERVED_PREFIXES = ("sqlite_",)
@@ -238,7 +237,6 @@ def file_to_table_name(filename: str) -> str:
     """
     import os
     return tableize_basename(os.path.basename(filename or ""))
-
 #==================================================#
 
 def make_file_public(file_id: str):
@@ -252,7 +250,6 @@ def make_file_public(file_id: str):
         ).execute()
     except Exception:
         pass  # ignore if permission already exists
-
 #==================================================#
 
 def ensure_uploads_log_schema():
@@ -330,7 +327,41 @@ def ensure_uploads_log_schema():
         END;""")
 
         conn.commit()
+#==================================================#
 
+def ensure_uploads_log_columns():
+    """Add missing Drive-era columns to uploads_log on old DBs."""
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+
+        # If the table itself doesn't exist yet, create the full schema first
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploads_log'")
+        if not c.fetchone():
+            ensure_uploads_log_schema()
+
+        c.execute("PRAGMA table_info(uploads_log)")
+        existing = {row[1] for row in c.fetchall()}
+
+        to_add = [
+            ("storage", "TEXT"),
+            ("drive_id", "TEXT"),
+            ("preview_url", "TEXT"),
+            ("download_url", "TEXT"),
+            ("source", "TEXT"),
+            ("description", "TEXT"),
+        ]
+        for col, typ in to_add:
+            if col not in existing:
+                c.execute(f"ALTER TABLE uploads_log ADD COLUMN {col} {typ}")
+        try:
+            # Don’t fail the request if dupes exist; just try to enforce uniqueness.
+            c.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
+                ON uploads_log(property, tab, filename)
+            """)
+        except sqlite3.OperationalError:
+            pass  # ignore if duplicates still exist; you can run your /admin/fix_uploads_uniqueness later
+        conn.commit()
 #==================================================#
 
 def auto_log_material_files():
@@ -486,9 +517,10 @@ def _run_startup_tasks():
         if _startup_done:
             return
         try:
-            ensure_uploads_log_schema()   # if you have this helper; otherwise drop it
+            ensure_uploads_log_schema()
+            ensure_uploads_log_columns() 
         except Exception as e:
-            app.logger.warning("ensure_uploads_log_schema skipped: %s", e)
+            app.logger.warning("ensure_uploads_log_schema/columns skipped: %s", e)
         # try:
         #     auto_import_uploads()
         # except Exception as e:
@@ -700,6 +732,10 @@ def admin_home():
 
     # Make sure catalog + audit schema exist (triggers are created here too)
     ensure_uploads_log_schema()
+    try:
+        ensure_uploads_log_columns()  # Add Drive-era columns if missing
+    except Exception as e:
+        app.logger.warning("ensure_uploads_log_columns : %s", e)
 
     # Build the history table: when first added, and whether still present publicly
     with sqlite3.connect(DB_NAME) as conn:
@@ -845,7 +881,6 @@ def diag_routes():
 #########################################################
 
 # -- View and import (admin + public, Drive-only adds) --
-# -- View and import (admin + Public) --
 @app.route('/materials/<property_name>/<tab>', methods=['GET', 'POST'])
 def property_detail(property_name, tab):
     # ---- titles / guards ----
@@ -862,31 +897,22 @@ def property_detail(property_name, tab):
     edit_message = ""
     is_admin = bool(session.get('admin'))
 
+    # Ensure columns exist on old DBs (adds storage/drive_id/preview_url/download_url/source/description if missing)
+    try:
+        ensure_uploads_log_columns()
+    except Exception as e:
+        app.logger.warning("ensure_uploads_log_columns raised: %s", e)
+
     # ---- admin POST handlers ----
     if is_admin and request.method == 'POST':
         try:
-            # 0) Ensure storage columns exist (for upgraded DBs)
-            try:
-                with sqlite3.connect(DB_NAME) as conn:
-                    cur = conn.cursor()
-                    cur.execute("SELECT storage, drive_id, preview_url, download_url FROM uploads_log LIMIT 1")
-            except Exception:
-                with sqlite3.connect(DB_NAME) as conn:
-                    cur = conn.cursor()
-                    cur.execute("ALTER TABLE uploads_log ADD COLUMN storage TEXT")
-                    cur.execute("ALTER TABLE uploads_log ADD COLUMN drive_id TEXT")
-                    cur.execute("ALTER TABLE uploads_log ADD COLUMN preview_url TEXT")
-                    cur.execute("ALTER TABLE uploads_log ADD COLUMN download_url TEXT")
-                    conn.commit()
-
-            # 1) Add a single Drive file by link/ID
+            # 1) Add a single Drive FILE by link/ID
             if request.form.get('add_drive'):
-                drive_link = request.form.get('drive_link', '').strip()
-                label = request.form.get('label', '').strip()
+                drive_link = (request.form.get('drive_link') or '').strip()
+                label = (request.form.get('label') or '').strip()
                 new_source = (request.form.get('row_source') or '').strip() if tab == 'dataset' else None
-                new_desc = (request.form.get('row_description') or '').strip()
+                new_desc   = (request.form.get('row_description') or '').strip()
 
-                ext = (label.rsplit('.', 1)[-1].lower() if '.' in label else '')
                 if not _ext_ok_for_tab(label, tab):
                     if tab == 'dataset':
                         upload_message = "Label must end with .csv or .npy for datasets."
@@ -903,16 +929,18 @@ def property_detail(property_name, tab):
                             c.execute(
                                 """
                                 INSERT INTO uploads_log
-                                   (property, tab, filename, uploaded_at, storage, drive_id, preview_url, download_url, source, description)
-                                VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'drive', ?, ?, ?, ?, ?)
+                                   (property, tab, filename, uploaded_at,
+                                    storage, drive_id, preview_url, download_url, source, description)
+                                VALUES (?, ?, ?, CURRENT_TIMESTAMP,
+                                        'drive', ?, ?, ?, ?, ?)
                                 ON CONFLICT(property, tab, filename)
                                 DO UPDATE SET
                                    uploaded_at = CURRENT_TIMESTAMP,
-                                   storage = 'drive',
-                                   drive_id = excluded.drive_id,
+                                   storage     = 'drive',
+                                   drive_id    = excluded.drive_id,
                                    preview_url = excluded.preview_url,
-                                   download_url = excluded.download_url,
-                                   source = COALESCE(excluded.source, uploads_log.source),
+                                   download_url= excluded.download_url,
+                                   source      = COALESCE(excluded.source, uploads_log.source),
                                    description = COALESCE(excluded.description, uploads_log.description)
                                 """,
                                 (property_name, tab, label, file_id, preview_url, download_url, new_source, new_desc),
@@ -920,15 +948,14 @@ def property_detail(property_name, tab):
                             conn.commit()
                         upload_message = f"Added Drive item '{label}'."
 
-            # 2) Link a Drive FOLDER → import all allowed files
+            # 2) Link a Drive FOLDER → import all allowed files directly under it
             elif request.form.get('link_folder'):
-                folder_link = request.form.get('drive_folder_link', '').strip()
+                folder_link = (request.form.get('drive_folder_link') or '').strip()
                 folder_id = _drive_extract_id(folder_link)
                 if not folder_id:
                     upload_message = "Invalid Drive folder link or ID."
                 else:
                     service = get_drive_service()
-                    # list files and import those with allowed extensions for this tab
                     files = drive_list_folder_files(service, folder_id)
                     imported = 0
                     with sqlite3.connect(DB_NAME) as conn:
@@ -942,15 +969,17 @@ def property_detail(property_name, tab):
                             c.execute(
                                 """
                                 INSERT INTO uploads_log
-                                   (property, tab, filename, uploaded_at, storage, drive_id, preview_url, download_url)
-                                VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'drive', ?, ?, ?)
+                                   (property, tab, filename, uploaded_at,
+                                    storage, drive_id, preview_url, download_url)
+                                VALUES (?, ?, ?, CURRENT_TIMESTAMP,
+                                        'drive', ?, ?, ?)
                                 ON CONFLICT(property, tab, filename)
                                 DO UPDATE SET
                                    uploaded_at = CURRENT_TIMESTAMP,
-                                   storage = 'drive',
-                                   drive_id = excluded.drive_id,
+                                   storage     = 'drive',
+                                   drive_id    = excluded.drive_id,
                                    preview_url = excluded.preview_url,
-                                   download_url = excluded.download_url
+                                   download_url= excluded.download_url
                                 """,
                                 (property_name, tab, name, fid, preview_url, download_url),
                             )
@@ -958,14 +987,14 @@ def property_detail(property_name, tab):
                         conn.commit()
                     upload_message = f"Linked folder: imported {imported} item(s)."
 
-            # 3) Upload a ZIP → push contents to Drive <root>/<property>/<tab> → import
+            # 3) Upload a ZIP → push files to Drive <root>/<property>/<tab> → log them
             elif request.form.get('zip_upload'):
-                if 'zipfile' not in request.files or request.files['zipfile'].filename == '':
+                if 'zipfile' not in request.files or not request.files['zipfile'].filename:
                     upload_message = "No ZIP file selected."
                 else:
                     zf = request.files['zipfile']
                     try:
-                        root_id = os.environ.get("GDRIVE_ROOT_FOLDER_ID", "").strip()
+                        root_id = (os.environ.get("GDRIVE_ROOT_FOLDER_ID") or "").strip()
                         if not root_id:
                             raise RuntimeError("GDRIVE_ROOT_FOLDER_ID not set.")
                         service = get_drive_service()
@@ -975,17 +1004,13 @@ def property_detail(property_name, tab):
                         z = zipfile.ZipFile(io.BytesIO(data))
                         uploaded = 0
 
-                        # Upload allowed files only
                         with sqlite3.connect(DB_NAME) as conn:
                             c = conn.cursor()
                             for info in z.infolist():
                                 if info.is_dir():
                                     continue
-                                # we only want the basename to be the label/filename
                                 base = os.path.basename(info.filename)
-                                if not base:
-                                    continue
-                                if not _ext_ok_for_tab(base, tab):
+                                if not base or not _ext_ok_for_tab(base, tab):
                                     continue
                                 file_bytes = z.read(info)
                                 fid = drive_upload_bytes(service, target_folder_id, base, file_bytes)
@@ -993,15 +1018,17 @@ def property_detail(property_name, tab):
                                 c.execute(
                                     """
                                     INSERT INTO uploads_log
-                                       (property, tab, filename, uploaded_at, storage, drive_id, preview_url, download_url)
-                                    VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'drive', ?, ?, ?)
+                                       (property, tab, filename, uploaded_at,
+                                        storage, drive_id, preview_url, download_url)
+                                    VALUES (?, ?, ?, CURRENT_TIMESTAMP,
+                                            'drive', ?, ?, ?)
                                     ON CONFLICT(property, tab, filename)
                                     DO UPDATE SET
                                        uploaded_at = CURRENT_TIMESTAMP,
-                                       storage = 'drive',
-                                       drive_id = excluded.drive_id,
+                                       storage     = 'drive',
+                                       drive_id    = excluded.drive_id,
                                        preview_url = excluded.preview_url,
-                                       download_url = excluded.download_url
+                                       download_url= excluded.download_url
                                     """,
                                     (property_name, tab, base, fid, preview_url, download_url),
                                 )
@@ -1012,7 +1039,7 @@ def property_detail(property_name, tab):
                     except Exception as e:
                         upload_message = f"ZIP upload failed: {e}"
 
-            # 4) Inline edit (source/description) – unchanged
+            # 4) Inline edit (source/description)
             elif 'edit_row' in request.form:
                 row_filename = (request.form.get('row_filename') or '').strip()
                 new_desc = (request.form.get('row_description') or '').strip()
@@ -1039,7 +1066,6 @@ def property_detail(property_name, tab):
                         )
                     conn.commit()
                 edit_message = f"Updated info for {row_filename}."
-
         except Exception as e:
             upload_message = f"Error: {e}"
 
@@ -1049,13 +1075,14 @@ def property_detail(property_name, tab):
         c = conn.cursor()
         c.execute(
             """
-            SELECT filename,
-                   COALESCE(source,'')      AS source,
-                   COALESCE(description,'') AS description,
-                   uploaded_at,
-                   COALESCE(storage,'local') AS storage,
-                   preview_url,
-                   download_url
+            SELECT
+                filename,
+                COALESCE(source,'')        AS source,
+                COALESCE(description,'')   AS description,
+                uploaded_at,
+                COALESCE(storage,'local')  AS storage,
+                COALESCE(preview_url,'')   AS preview_url,
+                COALESCE(download_url,'')  AS download_url
               FROM uploads_log
              WHERE property = ? AND tab = ?
           ORDER BY uploaded_at DESC, filename
@@ -1068,7 +1095,8 @@ def property_detail(property_name, tab):
     table_map = {}
     if tab == 'dataset':
         for row in uploads:
-            if (row['storage'] or 'local') != 'drive':
+            storage_val = row['storage'] if 'storage' in row.keys() else 'local'
+            if storage_val != 'drive':
                 fname = row['filename']
                 if fname and (fname.endswith('.csv') or fname.endswith('.npy')):
                     table_map[fname] = file_to_table_name(fname)
@@ -1083,8 +1111,7 @@ def property_detail(property_name, tab):
         edit_message=edit_message,
         admin=is_admin,
         table_map=table_map,
-    )
-    
+    )    
 #########################################################
 
 @app.route('/uploads/<path:filename>')
@@ -1095,7 +1122,6 @@ def uploaded_file(filename):
         print('File not found:', full_path)
         abort(404)
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
 #########################################################
 
 @app.route('/view_result/<property_name>/<tab>/<path:filename>')
