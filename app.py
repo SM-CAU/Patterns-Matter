@@ -111,15 +111,19 @@ def _drive_extract_id(link_or_id: str) -> Optional[str]:
 
 def drive_find_or_create_folder(service, parent_id: str, name: str) -> str:
     """Find a folder by name under parent; create if missing. Returns folder ID."""
+    # Escape single quotes for Drive query syntax: name = '...'
+    safe_name = (name or "").replace("'", "\\'")
+
     q = (
-        f"mimeType='application/vnd.google-apps.folder' "
-        f"and name='{name.replace(\"'\", \"\\'\")}' "
+        "mimeType='application/vnd.google-apps.folder' "
+        f"and name='{safe_name}' "
         f"and '{parent_id}' in parents and trashed=false"
     )
     res = service.files().list(q=q, fields="files(id,name)", pageSize=1).execute()
     items = res.get("files", [])
     if items:
         return items[0]["id"]
+
     meta = {
         "name": name,
         "mimeType": "application/vnd.google-apps.folder",
@@ -127,6 +131,7 @@ def drive_find_or_create_folder(service, parent_id: str, name: str) -> str:
     }
     created = service.files().create(body=meta, fields="id").execute()
     return created["id"]
+
 
 def drive_ensure_property_tab_folder(service, root_folder_id: str, prop: str, tab: str) -> str:
     """
@@ -236,25 +241,9 @@ def file_to_table_name(filename: str) -> str:
 
 #==================================================#
 
-# Google Drive integration using service account creds
-
-def drive():
-    """Build a Drive service using service-account creds from env."""
-    sa_path = os.environ.get("GDRIVE_SA_JSON", "").strip()
-    sa_b64 = os.environ.get("GDRIVE_SA_JSON_BASE64", "").strip()
-    if sa_path and os.path.isfile(sa_path):
-        creds = Credentials.from_service_account_file(sa_path, scopes=GDRIVE_SCOPES)
-    elif sa_b64:
-        import base64, json, tempfile
-        data = json.loads(base64.b64decode(sa_b64).decode("utf-8"))
-        creds = Credentials.from_service_account_info(data, scopes=GDRIVE_SCOPES)
-    else:
-        raise RuntimeError("No service account credentials provided (GDRIVE_SA_JSON or GDRIVE_SA_JSON_BASE64).")
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
-
 def make_file_public(file_id: str):
     """Ensure the file is readable by 'anyone with the link'."""
-    svc = drive()
+    svc = get_drive_service()
     try:
         svc.permissions().create(
             fileId=file_id,
@@ -262,48 +251,7 @@ def make_file_public(file_id: str):
             fields="id",
         ).execute()
     except Exception:
-        # If permission already exists, ignore.
-        pass
-
-def drive_links(file_id: str):
-    """Return (preview_url, download_url)."""
-    return (f"https://drive.google.com/file/d/{file_id}/preview",
-            f"https://drive.google.com/uc?export=download&id={file_id}")
-
-def _is_folder(item): 
-    return item.get("mimeType") == "application/vnd.google-apps.folder"
-
-def _drive_list_children(parent_id: str):
-    """Yield children of a Drive folder."""
-    svc = drive()
-    q = f"'{parent_id}' in parents and trashed=false"
-    token = None
-    while True:
-        resp = svc.files().list(
-            q=q, spaces="drive",
-            fields="nextPageToken, files(id,name,mimeType,modifiedTime)",
-            pageToken=token, pageSize=1000).execute()
-        for f in resp.get("files", []):
-            yield f
-        token = resp.get("nextPageToken")
-        if not token:
-            break
-
-def _find_child_by_name(parent_id: str, name: str):
-    for f in _drive_list_children(parent_id):
-        if f.get("name") == name:
-            return f
-    return None
-
-def _ensure_folder(parent_id: str, name: str):
-    """Find or create a subfolder."""
-    svc = drive()
-    existing = _find_child_by_name(parent_id, name)
-    if existing and _is_folder(existing):
-        return existing["id"]
-    meta = {"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]}
-    created = svc.files().create(body=meta, fields="id").execute()
-    return created["id"]
+        pass  # ignore if permission already exists
 
 #==================================================#
 
