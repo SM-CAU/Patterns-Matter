@@ -1,12 +1,11 @@
 <!DOCTYPE html>
 <html>
 <head>
-<<<<<<< HEAD
   <title>{{ pretty_title }} - {{ tab.title() }} | Patterns Matter</title>
   <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
   <style>
-    .container { max-width:1200px; margin:2em auto; padding:2em; background:#363636; border-radius:18px; box-shadow:0 2px 16px #2224; }
-    .upload-block { margin-top:2em; background:#363636; border-radius:10px; padding:1.5em; }
+    .container { max-width:1200px;margin:2em auto;padding:2em;background:#363636;border-radius:18px;box-shadow:0 2px 16px #2224; }
+    .upload-block { margin-top: 2em; background:#363636; border-radius:10px; padding:1.5em; }
     .upload-block h3 { color:#f08903; margin-top:0; }
     .msg { color:#e67e22; font-weight:bold; margin-bottom:1em; }
     .data-table-wrap { overflow-x:auto; margin-top:2em; }
@@ -22,175 +21,15 @@
     .pill.local { background:#444; color:#eee; }
     .return-home { display:inline-block; margin-top:2em; background:#2a6; color:#fff; border-radius:6px; padding:.6em 1.7em; text-decoration:none; font-weight:bold; }
     .return-home:hover { background:#225c44; }
-    @media (max-width: 900px) { .container { padding:.7em } .data-table { font-size:.97em } }
+    @media (max-width: 900px) { .container{padding:.7em} .data-table{font-size:.97em} }
     .small { font-size:.9em; color:#bcd; }
+    .stack > * { margin-bottom: .7em; }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="admin-link" style="text-align:right; margin-bottom:1em;">
-      {% if admin %}
-        <a href="{{ url_for('logout') }}">Logout</a>
-      {% else %}
-        <a href="{{ url_for('login') }}">Admin Login</a>
-      {% endif %}
-=======
-    <title>{{ pretty_title }} - {{ tab.title() }} | Patterns Matter</title>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
-    <style>
-        .container { max-width:1200px;margin:2em auto;padding:2em;background:#363636;border-radius:18px;box-shadow:0 2px 16px #2224; }
-        .upload-block { margin-top: 2em; background:#363636; border-radius:10px; padding:1.5em; }
-        .upload-block h3 { color:#f08903; margin-top:0; }
-        .msg { color:#e67e22; font-weight:bold; margin-bottom:1em; }
-        .data-table-wrap { overflow-x:auto; margin-top:2em; }
-        .data-table { width:100%; border-collapse:collapse; table-layout:fixed; background:#363636; }
-        .data-table th, .data-table td { border:1px solid #444; padding:.7em 1em; text-align:left; word-break:break-word; vertical-align:middle; }
-        .data-table th { background:#282; color:#fff; }
-        .data-table input[type="text"] { max-width:170px; background:#222; color:#fff; border:1px solid #888; border-radius:6px; padding:.2em .7em; }
-        .data-table button, .data-table .delete-btn { min-width:55px; padding:.3em 1em; }
-        .data-table .delete-btn { background:#d33; color:#fff; border:none; border-radius:6px; font-weight:bold; margin-left:.7em; cursor:pointer; }
-        .data-table .delete-btn:hover { background:#a22; }
-        .pill { display:inline-block; padding:.15em .55em; border-radius:10px; font-size:.85em; }
-        .pill.drive { background:#204f2a; color:#caffda; }
-        .pill.local { background:#444; color:#eee; }
-        .return-home { display:inline-block; margin-top:2em; background:#2a6; color:#fff; border-radius:6px; padding:.6em 1.7em; text-decoration:none; font-weight:bold; }
-        .return-home:hover { background:#225c44; }
-        @media (max-width: 900px) { .container{padding:.7em} .data-table{font-size:.97em} }
-        .small { font-size:.9em; color:#bcd; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="admin-link" style="text-align:right; margin-bottom:1em;">
-            {% if admin %}<a href="{{ url_for('logout') }}">Logout</a>{% else %}<a href="{{ url_for('login') }}">Admin Login</a>{% endif %}
-        </div>
-
-        <h1>{{ pretty_title }}: {{ tab.title() }}</h1>
-
-        <!-- Tabs -->
-        <div style="margin-bottom:1.5em;">
-            <a href="{{ url_for('property_detail', property_name=property_name, tab='dataset') }}"
-               style="padding:.6em 1.5em;border-radius:6px;text-decoration:none;font-weight:bold;
-                      background:{% if tab == 'dataset' %}#2a6{% else %}#363636{% endif %};color:#fff;margin-right:1em;">Dataset</a>
-            <a href="{{ url_for('property_detail', property_name=property_name, tab='results') }}"
-               style="padding:.6em 1.5em;border-radius:6px;text-decoration:none;font-weight:bold;
-                      background:{% if tab == 'results' %}#2a6{% else %}#363636{% endif %};color:#fff;">Results</a>
-        </div>
-
-        <!-- Admin-only: Drive Upload Form -->
-        {% if admin %}
-        <div class="upload-block">
-            <h3>Add a {{ pretty_title }} {{ tab.title() }} from Google Drive</h3>
-            {% if upload_message %}<div class="msg">{{ upload_message }}</div>{% endif %}
-            <form method="post">
-                <div class="small">Paste a Drive share link or file ID. Provide a short label to show publicly.</div>
-                <div style="margin-top:.7em;">
-                    <input type="text" name="drive_link" placeholder="Drive link or file ID" style="width:360px" required>
-                    <input type="text" name="label" placeholder="Public label (e.g., Featurized_Band_Gap_Data.csv)" style="width:360px" required>
-                </div>
-                {% if tab == 'dataset' %}
-                    <div style="margin-top:.7em;">
-                        <input type="text" name="row_source" placeholder="Source (optional)" style="width:360px">
-                    </div>
-                {% endif %}
-                <div style="margin-top:.7em;">
-                    <input type="text" name="row_description" placeholder="Description (optional)" style="width:720px">
-                </div>
-                <div style="margin-top:1em;">
-                    <button type="submit" name="add_drive" value="1">Add</button>
-                </div>
-            </form>
-        </div>
-        {% endif %}
-
-        {% if edit_message %}<div class="msg">{{ edit_message }}</div>{% endif %}
-
-        <!-- Public table -->
-        <div class="data-table-wrap">
-            <table class="data-table">
-                <tr>
-                    <th>Filename</th>
-                    {% if tab == 'dataset' %}<th>Source</th>{% endif %}
-                    <th>Description</th>
-                    <th>Uploaded At</th>
-                    <th>Storage</th>
-                    <th>Operation</th>
-                </tr>
-
-                {% for row in uploads %}
-                <tr>
-                    <td>{{ row.filename }}</td>
-
-                    {% if tab == 'dataset' %}
-                    <td>
-                        {% if admin %}
-                        <form method="post" style="display:inline;">
-                            <input type="hidden" name="row_filename" value="{{ row.filename }}">
-                            <input type="text" name="row_source" value="{{ row.source or '' }}" size="18">
-                        {% else %}
-                            {{ row.source or '' }}
-                        {% endif %}
-                    </td>
-                    {% endif %}
-
-                    <td>
-                        {% if admin %}
-                            {% if tab == 'dataset' %}
-                                <input type="text" name="row_description" value="{{ row.description or '' }}" size="22">
-                                <button type="submit" name="edit_row" value="1" style="margin-left:6px;">Save</button>
-                            </form>
-                            {% else %}
-                            <form method="post" style="display:inline;">
-                                <input type="hidden" name="row_filename" value="{{ row.filename }}">
-                                <input type="text" name="row_description" value="{{ row.description or '' }}" size="22">
-                                <button type="submit" name="edit_row" value="1" style="margin-left:6px;">Save</button>
-                            </form>
-                            {% endif %}
-                        {% else %}
-                            {{ row.description or '' }}
-                        {% endif %}
-                    </td>
-
-                    <td>{{ row.uploaded_at.split('T')[0] if row.uploaded_at else '' }}</td>
-
-                    <td>
-                        <span class="pill {{ row.storage or 'local' }}">{{ (row.storage or 'local')|title }}</span>
-                    </td>
-
-                    <td>
-                        {% if (row.storage or 'local') == 'drive' %}
-                            {% if row.preview_url %}<a href="{{ row.preview_url }}" target="_blank">View</a>{% endif %}
-                            {% if row.download_url %} | <a href="{{ row.download_url }}" target="_blank">Download</a>{% endif %}
-                        {% else %}
-                            {% if tab == 'dataset' and (row.filename.endswith('.csv') or row.filename.endswith('.npy')) %}
-                                <a href="{{ url_for('public_view', table=table_map.get(row.filename)) }}" target="_blank">View</a>
-                            {% elif tab == 'results' %}
-                                <a href="{{ url_for('view_result_file', property_name=property_name, tab=tab, filename=row.filename) }}" target="_blank">View</a>
-                            {% endif %}
-                            | <a href="{{ url_for('uploaded_file', filename=property_name + '/' + tab + '/' + row.filename) }}" download>Download</a>
-                        {% endif %}
-
-                        {% if admin %}
-                        <form action="{{ url_for('delete_dataset_file', property_name=property_name, tab=tab, filename=row.filename) }}"
-                              method="post" style="display:inline;" onsubmit="return confirm('Delete this entry?');">
-                            <button type="submit" class="delete-btn">Delete</button>
-                        </form>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-
-                {% if uploads|length == 0 %}
-                <tr>
-                    <td colspan="{% if tab == 'dataset' %}6{% else %}5{% endif %}">No files uploaded yet for this {{ tab }}.</td>
-                </tr>
-                {% endif %}
-            </table>
-        </div>
-
-        <a class="return-home" href="{{ url_for('public_home') }}">Return to Home</a>
-        <a class="return-home" href="{{ url_for('materials_portal') }}" style="margin-left:1.5em;">Back to Materials Database</a>
->>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
+      {% if admin %}<a href="{{ url_for('logout') }}">Logout</a>{% else %}<a href="{{ url_for('login') }}">Admin Login</a>{% endif %}
     </div>
 
     <h1>{{ pretty_title }}: {{ tab.title() }}</h1>
@@ -198,59 +37,53 @@
     <!-- Tabs -->
     <div style="margin-bottom:1.5em;">
       <a href="{{ url_for('property_detail', property_name=property_name, tab='dataset') }}"
-         style="padding:.6em 1.5em; border-radius:6px; text-decoration:none; font-weight:bold;
-                background:{% if tab == 'dataset' %}#2a6{% else %}#363636{% endif %}; color:#fff; margin-right:1em;">
-        Dataset
-      </a>
+         style="padding:.6em 1.5em;border-radius:6px;text-decoration:none;font-weight:bold;
+                background:{% if tab == 'dataset' %}#2a6{% else %}#363636{% endif %};color:#fff;margin-right:1em;">Dataset</a>
       <a href="{{ url_for('property_detail', property_name=property_name, tab='results') }}"
-         style="padding:.6em 1.5em; border-radius:6px; text-decoration:none; font-weight:bold;
-                background:{% if tab == 'results' %}#2a6{% else %}#363636{% endif %}; color:#fff;">
-        Results
-      </a>
+         style="padding:.6em 1.5em;border-radius:6px;text-decoration:none;font-weight:bold;
+                background:{% if tab == 'results' %}#2a6{% else %}#363636{% endif %};color:#fff;">Results</a>
     </div>
 
-    <!-- Admin-only: Drive Upload Form -->
+    <!-- Admin-only: Drive Forms -->
     {% if admin %}
-    <div class="upload-block">
+      <div class="upload-block">
         <h3>Add a {{ pretty_title }} {{ tab.title() }} from Google Drive</h3>
         {% if upload_message %}<div class="msg">{{ upload_message }}</div>{% endif %}
 
-        <!-- (A) Add ONE file by Drive link/ID -->
-        <form method="post" style="margin-bottom:1em;">
-            <div class="small">Paste a Drive file link or ID. Provide a short label to show publicly.</div>
-            <div style="margin-top:.7em;">
-                <input type="text" name="drive_link" placeholder="Drive file link or ID" style="width:360px" required>
-                <input type="text" name="label" placeholder="Public label (e.g., Featurized_Band_Gap_Data.csv)" style="width:360px" required>
-            </div>
-            {% if tab == 'dataset' %}
-                <div style="margin-top:.7em;">
-                    <input type="text" name="row_source" placeholder="Source (optional)" style="width:360px">
-                </div>
-            {% endif %}
-            <div style="margin-top:.7em;">
-                <input type="text" name="row_description" placeholder="Description (optional)" style="width:720px">
-            </div>
-            <div style="margin-top:1em;">
-                <button type="submit" name="add_drive" value="1">Add File</button>
-            </div>
+        <!-- Single file (by link/ID) -->
+        <form method="post" class="stack">
+          <div class="small">Paste a Drive file link or ID. Provide a short label to show publicly.</div>
+          <div>
+            <input type="text" name="drive_link" placeholder="Drive FILE link or file ID" style="width:360px" required>
+            <input type="text" name="label" placeholder="Public label (e.g., Featurized_Band_Gap_Data.csv)" style="width:360px" required>
+          </div>
+          {% if tab == 'dataset' %}
+            <div><input type="text" name="row_source" placeholder="Source (optional)" style="width:360px"></div>
+          {% endif %}
+          <div><input type="text" name="row_description" placeholder="Description (optional)" style="width:720px"></div>
+          <div><button type="submit" name="add_drive" value="1">Add</button></div>
         </form>
 
-        <hr style="border:none;border-top:1px solid #555;margin:1em 0;">
+        <hr style="border:0;border-top:1px solid #555;margin:1.2em 0;">
 
-        <!-- (B) Link an existing Drive folder (imports all allowed files) -->
-        <form method="post" style="margin-bottom:1em;">
-            <div class="small">Import all allowed files from a Drive folder (one-time import).</div>
-            <input type="text" name="drive_folder_link" placeholder="Paste Drive folder link or ID" style="width:560px" required>
+        <!-- Link a FOLDER (import all allowed files) -->
+        <form method="post" class="stack" style="margin-bottom:1em;">
+          <div class="small">Or link a Drive FOLDER (we’ll import all allowed files directly under it).</div>
+          <div>
+            <input type="text" name="drive_folder_link" placeholder="Drive FOLDER link or folder ID" style="width:560px" required>
             <button type="submit" name="link_folder" value="1">Link Folder</button>
+          </div>
         </form>
 
-        <!-- (C) Upload a ZIP → push to Drive → import -->
-        <form method="post" enctype="multipart/form-data">
-            <div class="small">Upload a ZIP; allowed files inside will be uploaded to Drive and imported.</div>
+        <!-- Upload a ZIP and push to Drive -->
+        <form method="post" enctype="multipart/form-data" class="stack">
+          <div class="small">Or upload a .zip; allowed files inside will be uploaded to Drive automatically.</div>
+          <div>
             <input type="file" name="zipfile" accept=".zip" required>
             <button type="submit" name="zip_upload" value="1">Upload ZIP to Drive</button>
+          </div>
         </form>
-    </div>
+      </div>
     {% endif %}
 
     {% if edit_message %}<div class="msg">{{ edit_message }}</div>{% endif %}
@@ -268,75 +101,68 @@
         </tr>
 
         {% for row in uploads %}
-          <tr>
-            <!-- Filename -->
-            <td>{{ row.filename }}</td>
+          {% set storage = (row.storage if row.storage is defined else (row['storage'] if row['storage'] is defined else 'local')) %}
+          {% set filename = (row.filename if row.filename is defined else row['filename']) %}
+          {% set source = (row.source if row.source is defined else row['source']) %}
+          {% set description = (row.description if row.description is defined else row['description']) %}
+          {% set uploaded_at = (row.uploaded_at if row.uploaded_at is defined else row['uploaded_at']) %}
+          {% set preview_url = (row.preview_url if row.preview_url is defined else row['preview_url']) %}
+          {% set download_url = (row.download_url if row.download_url is defined else row['download_url']) %}
 
-            <!-- Source (only datasets) -->
+          <tr>
+            <td>{{ filename }}</td>
+
             {% if tab == 'dataset' %}
               <td>
                 {% if admin %}
-                  <!-- Start edit form for dataset rows (source + description) -->
                   <form method="post" style="display:inline;">
-                    <input type="hidden" name="row_filename" value="{{ row.filename }}">
-                    <input type="text" name="row_source" value="{{ row.source or '' }}" size="18">
+                    <input type="hidden" name="row_filename" value="{{ filename }}">
+                    <input type="text" name="row_source" value="{{ source or '' }}" size="18">
                 {% else %}
-                  {{ row.source or '' }}
+                  {{ source or '' }}
                 {% endif %}
               </td>
             {% endif %}
 
-            <!-- Description -->
             <td>
               {% if admin %}
                 {% if tab == 'dataset' %}
-                  <input type="text" name="row_description" value="{{ row.description or '' }}" size="22">
+                  <input type="text" name="row_description" value="{{ description or '' }}" size="22">
                   <button type="submit" name="edit_row" value="1" style="margin-left:6px;">Save</button>
                   </form>
                 {% else %}
-                  <!-- Separate edit form for results rows (description only) -->
                   <form method="post" style="display:inline;">
-                    <input type="hidden" name="row_filename" value="{{ row.filename }}">
-                    <input type="text" name="row_description" value="{{ row.description or '' }}" size="22">
+                    <input type="hidden" name="row_filename" value="{{ filename }}">
+                    <input type="text" name="row_description" value="{{ description or '' }}" size="22">
                     <button type="submit" name="edit_row" value="1" style="margin-left:6px;">Save</button>
                   </form>
                 {% endif %}
               {% else %}
-                {{ row.description or '' }}
+                {{ description or '' }}
               {% endif %}
             </td>
 
-            <!-- Uploaded At -->
-            <td>{{ row.uploaded_at.split('T')[0] if row.uploaded_at else '' }}</td>
+            <td>{{ uploaded_at.split('T')[0] if uploaded_at else '' }}</td>
 
-            <!-- Storage pill -->
             <td>
-              {% set store = row.storage or 'local' %}
-              <span class="pill {{ store }}">{{ store|title }}</span>
+              <span class="pill {{ storage or 'local' }}">{{ (storage or 'local')|title }}</span>
             </td>
 
-            <!-- Operation -->
             <td>
-              {% set store = row.storage or 'local' %}
-              {% if store == 'drive' %}
-                {% if row.preview_url %}<a href="{{ row.preview_url }}" target="_blank">View</a>{% endif %}
-                {% if row.download_url %} | <a href="{{ row.download_url }}" target="_blank">Download</a>{% endif %}
+              {% if (storage or 'local') == 'drive' %}
+                {% if preview_url %}<a href="{{ preview_url }}" target="_blank">View</a>{% endif %}
+                {% if download_url %} | <a href="{{ download_url }}" target="_blank">Download</a>{% endif %}
               {% else %}
-                {% if tab == 'dataset' and (row.filename.endswith('.csv') or row.filename.endswith('.npy')) %}
-                  {% set tname = (table_map.get(row.filename) if (table_map is defined) else None) %}
-                  {% if tname %}
-                    <a href="{{ url_for('public_view', table=tname) }}" target="_blank">View</a>
-                  {% else %}
-                    <a href="{{ url_for('view_table', filename=property_name ~ '/' ~ tab ~ '/' ~ row.filename) }}" target="_blank">View</a>
-                  {% endif %}
+                {% if tab == 'dataset' and (filename.endswith('.csv') or filename.endswith('.npy')) %}
+                  <a href="{{ url_for('public_view', table=table_map.get(filename)) }}" target="_blank">View</a>
                 {% elif tab == 'results' %}
-                  <a href="{{ url_for('view_result_file', property_name=property_name, tab=tab, filename=row.filename) }}" target="_blank">View</a>
+                  <a href="{{ url_for('view_result_file', property_name=property_name, tab=tab, filename=filename) }}" target="_blank">View</a>
                 {% endif %}
-                | <a href="{{ url_for('uploaded_file', filename=property_name + '/' + tab + '/' + row.filename) }}" download>Download</a>
+                 | <a href="{{ url_for('uploaded_file', filename=property_name + '/' + tab + '/' + filename) }}" download>Download</a>
               {% endif %}
 
               {% if admin %}
-                <form action="{{ url_for('delete_dataset_file', property_name=property_name, tab=tab, filename=row.filename) }}"
+                <form action="{{ url_for('delete_dataset_file', property_name=property_name, tab=tab, filename=filename) }}"
                       method="post" style="display:inline;" onsubmit="return confirm('Delete this entry?');">
                   <button type="submit" class="delete-btn">Delete</button>
                 </form>
@@ -347,9 +173,7 @@
 
         {% if uploads|length == 0 %}
           <tr>
-            <td colspan="{% if tab == 'dataset' %}6{% else %}5{% endif %}">
-              No files uploaded yet for this {{ tab }}.
-            </td>
+            <td colspan="{% if tab == 'dataset' %}6{% else %}5{% endif %}">No files uploaded yet for this {{ tab }}.</td>
           </tr>
         {% endif %}
       </table>
