@@ -253,78 +253,91 @@ def make_file_public(file_id: str):
 #==================================================#
 
 def ensure_uploads_log_schema():
-    """Public catalog (uploads_log) + audit history (uploads_audit) with triggers."""
+    """
+    Create/upgrade:
+      - uploads_log (public catalog)
+      - uploads_audit (history)
+      - audit triggers (insert/update/delete on uploads_log)
+    Never let a UNIQUE index error block creating the audit bits.
+    """
     with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
 
-        # Public catalog (what public pages read)
+        # 1) Public catalog (Drive-era columns included)
         c.execute("""
-        CREATE TABLE IF NOT EXISTS uploads_log (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            property    TEXT NOT NULL,
-            tab         TEXT NOT NULL,      -- 'dataset' | 'results'
-            filename    TEXT NOT NULL,      -- human-visible label
-            uploaded_at TEXT,               -- first/last touch, maintained by app
-            -- Drive-first metadata
-            storage     TEXT,               -- 'drive' | 'local' (legacy)
-            drive_id    TEXT,
-            preview_url TEXT,
-            download_url TEXT,
-            source      TEXT,
-            description TEXT,
-            UNIQUE(property, tab, filename)
-        )
+            CREATE TABLE IF NOT EXISTS uploads_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                property     TEXT NOT NULL,
+                tab          TEXT NOT NULL,      -- 'dataset' | 'results'
+                filename     TEXT NOT NULL,      -- human-visible label
+                uploaded_at  TEXT,               -- first/last touch, maintained by app
+                -- Drive-first metadata
+                storage      TEXT,               -- 'drive' | 'local' (legacy)
+                drive_id     TEXT,
+                preview_url  TEXT,
+                download_url TEXT,
+                source       TEXT,
+                description  TEXT,
+                UNIQUE(property, tab, filename)
+            )
         """)
 
-        # Ensure index exists even on old DBs
+        # 2) Unique index: wrap so it never blocks later steps
+        try:
+            c.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
+                ON uploads_log(property, tab, filename)
+            """)
+        except sqlite3.OperationalError as e:
+            # e.g., duplicates present -> index creation fails. Log and continue.
+            app.logger.warning("ensure_uploads_log_schema: unique index creation skipped: %s", e)
+
+        # 3) Audit table (history)
         c.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
-        ON uploads_log(property, tab, filename)
+            CREATE TABLE IF NOT EXISTS uploads_audit (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                property  TEXT NOT NULL,
+                tab       TEXT NOT NULL,
+                filename  TEXT NOT NULL,
+                action    TEXT NOT NULL,   -- add | update | delete
+                at        TEXT NOT NULL
+            )
         """)
 
-        # ---- Audit table
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS uploads_audit (
-            id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            property  TEXT NOT NULL,
-            tab       TEXT NOT NULL,
-            filename  TEXT NOT NULL,
-            action    TEXT NOT NULL,   -- add | update | delete
-            at        TEXT NOT NULL
-        )
-        """)
-
-        # Helper to create triggers idempotently
-        def ensure_trigger(name, ddl):
+        # 4) Triggers (create only if missing)
+        def ensure_trigger(name: str, ddl: str):
             c.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?", (name,))
             if not c.fetchone():
                 c.execute(ddl)
 
         ensure_trigger("trg_ul_insert_audit", """
-        CREATE TRIGGER trg_ul_insert_audit
-        AFTER INSERT ON uploads_log
-        BEGIN
-          INSERT INTO uploads_audit(property, tab, filename, action, at)
-          VALUES (NEW.property, NEW.tab, NEW.filename, 'add',
-                  COALESCE(NEW.uploaded_at, CURRENT_TIMESTAMP));
-        END;""")
+            CREATE TRIGGER trg_ul_insert_audit
+            AFTER INSERT ON uploads_log
+            BEGIN
+              INSERT INTO uploads_audit(property, tab, filename, action, at)
+              VALUES (NEW.property, NEW.tab, NEW.filename, 'add',
+                      COALESCE(NEW.uploaded_at, CURRENT_TIMESTAMP));
+            END;
+        """)
 
         ensure_trigger("trg_ul_update_audit", """
-        CREATE TRIGGER trg_ul_update_audit
-        AFTER UPDATE ON uploads_log
-        BEGIN
-          INSERT INTO uploads_audit(property, tab, filename, action, at)
-          VALUES (NEW.property, NEW.tab, NEW.filename, 'update',
-                  COALESCE(NEW.uploaded_at, CURRENT_TIMESTAMP));
-        END;""")
+            CREATE TRIGGER trg_ul_update_audit
+            AFTER UPDATE ON uploads_log
+            BEGIN
+              INSERT INTO uploads_audit(property, tab, filename, action, at)
+              VALUES (NEW.property, NEW.tab, NEW.filename, 'update',
+                      COALESCE(NEW.uploaded_at, CURRENT_TIMESTAMP));
+            END;
+        """)
 
         ensure_trigger("trg_ul_delete_audit", """
-        CREATE TRIGGER trg_ul_delete_audit
-        AFTER DELETE ON uploads_log
-        BEGIN
-          INSERT INTO uploads_audit(property, tab, filename, action, at)
-          VALUES (OLD.property, OLD.tab, OLD.filename, 'delete', CURRENT_TIMESTAMP);
-        END;""")
+            CREATE TRIGGER trg_ul_delete_audit
+            AFTER DELETE ON uploads_log
+            BEGIN
+              INSERT INTO uploads_audit(property, tab, filename, action, at)
+              VALUES (OLD.property, OLD.tab, OLD.filename, 'delete', CURRENT_TIMESTAMP);
+            END;
+        """)
 
         conn.commit()
 #==================================================#
@@ -730,37 +743,66 @@ def admin_home():
     if not session.get('admin'):
         return redirect(url_for('login'))
 
-    # Make sure catalog + audit schema exist (triggers are created here too)
-    ensure_uploads_log_schema()
+    # Ensure base schema exists (tables + triggers), but never crash this page
     try:
-        ensure_uploads_log_columns()  # Add Drive-era columns if missing
+        ensure_uploads_log_schema()
     except Exception as e:
-        app.logger.warning("ensure_uploads_log_columns : %s", e)
+        app.logger.warning("ensure_uploads_log_schema raised: %s", e)
 
-    # Build the history table: when first added, and whether still present publicly
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("""
-        WITH hist AS (
-          SELECT property, tab, filename,
-                 MIN(CASE WHEN action='add' THEN at END) AS first_added,
-                 MAX(at) AS last_event
-            FROM uploads_audit
-        GROUP BY property, tab, filename
-        )
-        SELECT
-          h.filename AS file_name,
-          COALESCE(h.first_added, h.last_event) AS uploaded_at,
-          CASE WHEN u.rowid IS NULL THEN 'Absent' ELSE 'Present' END AS public_view_status
-        FROM hist h
-        LEFT JOIN uploads_log u
-               ON u.property=h.property AND u.tab=h.tab AND u.filename=h.filename
-        ORDER BY uploaded_at DESC, h.filename;
-        """)
-        audit_rows = c.fetchall()
+    # Best effort: make sure Drive-era columns exist (storage, drive_id, etc.)
+    try:
+        ensure_uploads_log_columns()  # your existing helper that ALTER TABLE as needed
+    except Exception as e:
+        app.logger.warning("ensure_uploads_log_columns raised: %s", e)
+
+    # Guard: if audit table still missing (older DBs), create it quickly so page works
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            c = conn.cursor()
+            c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploads_audit'")
+            if not c.fetchone():
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS uploads_audit (
+                        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                        property  TEXT NOT NULL,
+                        tab       TEXT NOT NULL,
+                        filename  TEXT NOT NULL,
+                        action    TEXT NOT NULL,   -- add | update | delete
+                        at        TEXT NOT NULL
+                    )
+                """)
+                conn.commit()
+    except Exception as e:
+        app.logger.warning("guard-create uploads_audit failed: %s", e)
+
+    # Build the history table (don’t crash page if something’s off)
+    audit_rows = []
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            c = conn.cursor()
+            c.execute("""
+                WITH hist AS (
+                  SELECT property, tab, filename,
+                         MIN(CASE WHEN action='add' THEN at END) AS first_added,
+                         MAX(at) AS last_event
+                    FROM uploads_audit
+                GROUP BY property, tab, filename
+                )
+                SELECT
+                  h.filename AS file_name,
+                  COALESCE(h.first_added, h.last_event) AS uploaded_at,
+                  CASE WHEN u.rowid IS NULL THEN 'Absent' ELSE 'Present' END AS public_view_status
+                FROM hist h
+                LEFT JOIN uploads_log u
+                       ON u.property=h.property AND u.tab=h.tab AND u.filename=h.filename
+                ORDER BY uploaded_at DESC, h.filename;
+            """)
+            audit_rows = c.fetchall()
+    except Exception as e:
+        app.logger.warning("admin_home query failed: %s", e)
+        audit_rows = []
 
     return render_template('admin_home.html', audit_rows=audit_rows)
-
 #########################################################
 
 @app.route("/admin/fix_uploads_uniqueness", methods=["GET", "POST"])
