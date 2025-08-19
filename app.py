@@ -6,19 +6,19 @@ import os
 import pandas as pd
 import numpy as np
 import sqlite3
+
 from werkzeug.utils import secure_filename
 import datetime
 import re
 import csv
-<<<<<<< HEAD
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 import io, base64, zipfile
 from typing import List, Dict, Optional
 
-=======
->>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
+
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+
 
 # ========== SETTINGS ==========
 
@@ -34,11 +34,8 @@ app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.secret_key = 'IronMa1deN!'
 
-<<<<<<< HEAD
 GDRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-=======
->>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
 # ---------- Utility Functions ----------
 
 def allowed_dataset_file(filename):
@@ -52,7 +49,6 @@ def allowed_music_file(filename):
 
 # ========== Helper Functions ========== #
 
-<<<<<<< HEAD
 def get_drive_service():
     """
     Build a Drive v3 service from a Service Account.
@@ -179,8 +175,6 @@ def _drive_urls(file_id: str) -> (str, str):
 
 #==================================================#
 
-=======
->>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
 _SQLITE_RESERVED_PREFIXES = ("sqlite_",)
 
 def tableize_basename(name: str) -> str:
@@ -240,7 +234,6 @@ def file_to_table_name(filename: str) -> str:
 
 #==================================================#
 
-<<<<<<< HEAD
 # Google Drive integration using service account creds
 
 def drive():
@@ -312,8 +305,6 @@ def _ensure_folder(parent_id: str, name: str):
 
 #==================================================#
 
-=======
->>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
 def ensure_uploads_log_schema():
     """Public catalog (uploads_log) + audit history (uploads_audit) with triggers."""
     with sqlite3.connect(DB_NAME) as conn:
@@ -548,7 +539,6 @@ def _run_startup_tasks():
             ensure_uploads_log_schema()   # if you have this helper; otherwise drop it
         except Exception as e:
             app.logger.warning("ensure_uploads_log_schema skipped: %s", e)
-<<<<<<< HEAD
         # try:
         #     auto_import_uploads()
         # except Exception as e:
@@ -558,16 +548,6 @@ def _run_startup_tasks():
         # except Exception as e:
         #     app.logger.warning("auto_log_material_files skipped: %s", e)
             
-=======
-        try:
-            auto_import_uploads()
-        except Exception as e:
-            app.logger.warning("auto_import_uploads skipped: %s", e)
-        try:
-            auto_log_material_files()
-        except Exception as e:
-            app.logger.warning("auto_log_material_files skipped: %s", e)
->>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
         _startup_done = True
 
 @app.before_request
@@ -914,11 +894,7 @@ def diag_routes():
 
 #########################################################
 
-<<<<<<< HEAD
 # -- View and import (admin + public, Drive-only adds) --
-=======
-# -- View and import (admin + Public) --
->>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
 # -- View and import (admin + Public) --
 @app.route('/materials/<property_name>/<tab>', methods=['GET', 'POST'])
 def property_detail(property_name, tab):
@@ -936,7 +912,6 @@ def property_detail(property_name, tab):
     edit_message = ""
     is_admin = bool(session.get('admin'))
 
-<<<<<<< HEAD
     # ---- admin POST handlers ----
     if is_admin and request.method == 'POST':
         try:
@@ -1119,106 +1094,11 @@ def property_detail(property_name, tab):
             upload_message = f"Error: {e}"
 
     # ---- fetch current uploads (public catalog) ----
-=======
-    # Helper: parse Google Drive link or raw id
-    def _extract_drive_id(link_or_id: str):
-        s = (link_or_id or "").strip()
-        m = re.search(r"/d/([a-zA-Z0-9_-]+)", s)
-        if m: return m.group(1)
-        m = re.search(r"[?&]id=([a-zA-Z0-9_-]+)", s)
-        if m: return m.group(1)
-        if re.match(r"^[a-zA-Z0-9_-]{10,}$", s):
-            return s
-        return None
-
-    # Make sure schema exists (columns like storage/preview_url/etc.)
-    try:
-        ensure_uploads_log_schema()
-    except Exception as e:
-        app.logger.warning("ensure_uploads_log_schema: %s", e)
-
-    # ---- admin POST handlers ----
-    if is_admin and request.method == 'POST':
-        # 1) Add Drive entry
-        if request.form.get('add_drive'):
-            drive_link = request.form.get('drive_link', '').strip()
-            label = request.form.get('label', '').strip()
-            new_source = (request.form.get('row_source') or '').strip() if tab == 'dataset' else None
-            new_desc = (request.form.get('row_description') or '').strip()
-
-            # Basic ext check from label to keep tabs consistent
-            ext = (label.rsplit('.', 1)[-1].lower() if '.' in label else '')
-            if tab == 'dataset' and ext not in ALLOWED_DATASET_EXTENSIONS:
-                upload_message = "Label must end with .csv or .npy for datasets."
-            elif tab == 'results' and ext not in ALLOWED_RESULTS_EXTENSIONS:
-                upload_message = f"Label must be one of: {', '.join(sorted(ALLOWED_RESULTS_EXTENSIONS))}."
-            else:
-                file_id = _extract_drive_id(drive_link)
-                if not file_id:
-                    upload_message = "Invalid Google Drive link or ID."
-                else:
-                    preview_url = f"https://drive.google.com/file/d/{file_id}/preview"
-                    download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                    with sqlite3.connect(DB_NAME) as conn:
-                        c = conn.cursor()
-                        c.execute(
-                            """
-                            INSERT INTO uploads_log
-                                (property, tab, filename, uploaded_at,
-                                 storage, drive_id, preview_url, download_url, source, description)
-                            VALUES (?, ?, ?, CURRENT_TIMESTAMP,
-                                    'drive', ?, ?, ?, ?, ?)
-                            ON CONFLICT(property, tab, filename)
-                            DO UPDATE SET
-                                uploaded_at = CURRENT_TIMESTAMP,
-                                storage     = 'drive',
-                                drive_id    = excluded.drive_id,
-                                preview_url = excluded.preview_url,
-                                download_url= excluded.download_url,
-                                source      = COALESCE(excluded.source, uploads_log.source),
-                                description = COALESCE(excluded.description, uploads_log.description)
-                            """,
-                            (property_name, tab, label, file_id, preview_url, download_url, new_source, new_desc),
-                        )
-                        conn.commit()
-                    upload_message = f"Added Drive item '{label}'."
-
-        # 2) Inline edit (source/description)
-        elif 'edit_row' in request.form:
-            row_filename = (request.form.get('row_filename') or '').strip()
-            new_desc = (request.form.get('row_description') or '').strip()
-            with sqlite3.connect(DB_NAME) as conn:
-                c = conn.cursor()
-                if tab == 'dataset':
-                    new_source = (request.form.get('row_source') or '').strip()
-                    c.execute(
-                        """
-                        UPDATE uploads_log
-                           SET source = ?, description = ?
-                         WHERE property = ? AND tab = ? AND filename = ?
-                        """,
-                        (new_source, new_desc, property_name, tab, row_filename),
-                    )
-                else:
-                    c.execute(
-                        """
-                        UPDATE uploads_log
-                           SET description = ?
-                         WHERE property = ? AND tab = ? AND filename = ?
-                        """,
-                        (new_desc, property_name, tab, row_filename),
-                    )
-                conn.commit()
-            edit_message = f"Updated info for {row_filename}."
-
-    # ---- fetch current uploads as plain dicts (so Jinja `row.filename` works) ----
->>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
     with sqlite3.connect(DB_NAME) as conn:
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
         c.execute(
             """
-<<<<<<< HEAD
             SELECT filename,
                    COALESCE(source,'')      AS source,
                    COALESCE(description,'') AS description,
@@ -1226,23 +1106,12 @@ def property_detail(property_name, tab):
                    COALESCE(storage,'local') AS storage,
                    preview_url,
                    download_url
-=======
-            SELECT
-                filename,
-                COALESCE(source,'')        AS source,
-                COALESCE(description,'')   AS description,
-                uploaded_at,
-                COALESCE(storage,'local')  AS storage,
-                COALESCE(preview_url,'')   AS preview_url,
-                COALESCE(download_url,'')  AS download_url
->>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
               FROM uploads_log
              WHERE property = ? AND tab = ?
           ORDER BY uploaded_at DESC, filename
             """,
             (property_name, tab),
         )
-<<<<<<< HEAD
         uploads = c.fetchall()
 
     # Map local dataset filenames to SQL table names (for old/local files)
@@ -1252,17 +1121,6 @@ def property_detail(property_name, tab):
             if (row['storage'] or 'local') != 'drive':
                 fname = row['filename']
                 if fname and (fname.endswith('.csv') or fname.endswith('.npy')):
-=======
-        uploads = [dict(r) for r in c.fetchall()]
-
-    # Map local dataset filenames to SQL table names (for potential view links)
-    table_map = {}
-    if tab == 'dataset':
-        for row in uploads:
-            if row.get('storage') != 'drive':
-                fname = row.get('filename', '')
-                if fname.endswith('.csv') or fname.endswith('.npy'):
->>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
                     table_map[fname] = file_to_table_name(fname)
 
     return render_template(
@@ -1276,10 +1134,6 @@ def property_detail(property_name, tab):
         admin=is_admin,
         table_map=table_map,
     )
-<<<<<<< HEAD
-=======
-
->>>>>>> de853a6ad379935603467611a67615b2f6aed6dc
     
 #########################################################
 
