@@ -377,6 +377,48 @@ def ensure_uploads_log_columns():
         conn.commit()
 #==================================================#
 
+def dedupe_uploads_log():
+    """Remove duplicate (property,tab,filename) rows and enforce unique index."""
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        # Try best: keep by uploaded_at desc, then rowid desc (needs window functions)
+        try:
+            c.executescript("""
+                WITH ranked AS (
+                  SELECT rowid,
+                         property, tab, filename,
+                         COALESCE(uploaded_at,'') AS ts,
+                         ROW_NUMBER() OVER (
+                           PARTITION BY property, tab, filename
+                           ORDER BY ts DESC, rowid DESC
+                         ) AS rn
+                  FROM uploads_log
+                )
+                DELETE FROM uploads_log
+                 WHERE rowid IN (SELECT rowid FROM ranked WHERE rn > 1);
+            """)
+        except sqlite3.OperationalError:
+            # Fallback for older SQLite: keep MAX(rowid)
+            c.execute("""
+                DELETE FROM uploads_log
+                 WHERE rowid NOT IN (
+                   SELECT MAX(rowid)
+                     FROM uploads_log
+                    GROUP BY property, tab, filename
+                 );
+            """)
+        # Enforce uniqueness
+        try:
+            c.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
+                ON uploads_log(property, tab, filename)
+            """)
+        except sqlite3.OperationalError as e:
+            # If this fails, we’ll at least not crash the app
+            current_app.logger.warning("unique index create failed: %s", e)
+        conn.commit()
+#==================================================#
+
 def auto_log_material_files():
     """
     Walk UPLOAD_FOLDER and upsert one row per (property, tab, filename).
@@ -531,18 +573,16 @@ def _run_startup_tasks():
             return
         try:
             ensure_uploads_log_schema()
-            ensure_uploads_log_columns() 
         except Exception as e:
-            app.logger.warning("ensure_uploads_log_schema/columns skipped: %s", e)
-        # try:
-        #     auto_import_uploads()
-        # except Exception as e:
-        #     app.logger.warning("auto_import_uploads skipped: %s", e)
-        # try:
-        #     auto_log_material_files()
-        # except Exception as e:
-        #     app.logger.warning("auto_log_material_files skipped: %s", e)
-            
+            app.logger.warning("ensure_uploads_log_schema: %s", e)
+        try:
+            ensure_uploads_log_columns()
+        except Exception as e:
+            app.logger.warning("ensure_uploads_log_columns: %s", e)
+        try:
+            dedupe_uploads_log()
+        except Exception as e:
+            app.logger.warning("dedupe_uploads_log: %s", e)
         _startup_done = True
 
 @app.before_request
