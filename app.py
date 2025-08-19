@@ -1133,15 +1133,25 @@ def property_detail(property_name, tab):
         )
         uploads = c.fetchall()
 
-    # Map local dataset filenames to SQL table names (for old/local files)
+    # Map local dataset filenames to SQL table names (only if the table exists)
     table_map = {}
     if tab == 'dataset':
+        with sqlite3.connect(DB_NAME) as conn:
+            existing = {
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                )
+            }
+
         for row in uploads:
-            storage_val = row['storage'] if 'storage' in row.keys() else 'local'
+            # sqlite3.Row is dict-like; 'storage' may be missing on older rows
+            storage_val = (row['storage'] if 'storage' in row.keys() and row['storage'] else 'local')
             if storage_val != 'drive':
-                fname = row['filename']
+                fname = row['filename']  # always selected in the query
                 if fname and (fname.endswith('.csv') or fname.endswith('.npy')):
-                    table_map[fname] = file_to_table_name(fname)
+                    tname = file_to_table_name(fname)
+                    if tname in existing:
+                        table_map[fname] = tname
 
     return render_template(
         'property_detail.html',
@@ -1278,16 +1288,39 @@ def view_table(filename):
 
 @app.route('/dataset/<table>')
 def public_view(table):
-    # Anyone can view any table
-    with sqlite3.connect(DB_NAME) as conn:
-        df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
-    return render_template('view_table.html',
-                           tables=[df.to_html(classes='data')],
-                           titles=df.columns.values,
-                           filename=table,
-                           imported_table=table,
-                           admin=False)
-    
+    # allow only simple identifiers
+    if not re.match(r'^[A-Za-z0-9_]+$', table or ''):
+        abort(404)
+
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            # verify table exists
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+            if not cur.fetchone():
+                abort(404)
+
+            # quote identifier to avoid issues with reserved words/case
+            df = pd.read_sql_query(f'SELECT * FROM "{table}"', conn)
+
+        return render_template(
+            'view_table.html',
+            tables=[df.to_html(classes='data', index=False)],
+            titles=df.columns.values,
+            filename=table,
+            imported_table=table,
+            admin=False
+        )
+    except Exception as e:
+        # don’t 500 the whole app; show a friendly message
+        return render_template(
+            'view_table.html',
+            tables=[f"<p><b>Error loading table '{table}':</b> {e}</p>"],
+            titles=[],
+            filename=table,
+            imported_table=table,
+            admin=False
+        ), 200
 #########################################################
 
 @app.route('/download/<table>')
