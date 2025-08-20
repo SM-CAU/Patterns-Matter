@@ -41,7 +41,7 @@ def allowed_results_file(filename):
 def allowed_music_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_MUSIC_EXTENSIONS
 
-# ========== Helper Functions ========== #
+# ================================================================= Helper Functions ((8 helpers for drive-api))================================================== #
 
 def get_drive_service():
     """
@@ -84,7 +84,7 @@ def get_drive_service():
         return build("drive", "v3", credentials=creds)
     except Exception as e:
         raise RuntimeError(f"Failed to build Drive service: {e}")
-
+#=======================================================================================================================================================================#
 
 def _drive_extract_id(link_or_id: str) -> Optional[str]:
     """
@@ -108,6 +108,7 @@ def _drive_extract_id(link_or_id: str) -> Optional[str]:
     if re.match(r"^[A-Za-z0-9_-]{10,}$", s):  # loose check
         return s
     return None
+#=======================================================================================================================================================================#
 
 def drive_find_or_create_folder(service, parent_id: str, name: str) -> str:
     """Find a folder by name under parent; create if missing. Returns folder ID."""
@@ -131,7 +132,7 @@ def drive_find_or_create_folder(service, parent_id: str, name: str) -> str:
     }
     created = service.files().create(body=meta, fields="id").execute()
     return created["id"]
-
+#=======================================================================================================================================================================#
 
 def drive_ensure_property_tab_folder(service, root_folder_id: str, prop: str, tab: str) -> str:
     """
@@ -140,39 +141,19 @@ def drive_ensure_property_tab_folder(service, root_folder_id: str, prop: str, ta
     prop_id = drive_find_or_create_folder(service, root_folder_id, prop)
     tab_id = drive_find_or_create_folder(service, prop_id, tab)
     return tab_id
+#=======================================================================================================================================================================#
 
 def drive_list_folder_files(service, folder_id: str, recursive: bool = False) -> List[Dict]:
     """
     List non-trashed files (id,name,mimeType) under folder_id.
-    If recursive=True, also walk all subfolders.
+    If recursive=True, include files in all subfolders depth-first.
     """
     items: List[Dict] = []
     stack = [folder_id]
-    seen_folders = set()
-
     while stack:
         fid = stack.pop()
-        if fid in seen_folders:
-            continue
-        seen_folders.add(fid)
-
-        res = service.files().list(
-            q=f"'{fid}' in parents and trashed=false",
-            fields="nextPageToken, files(id,name,mimeType)",
-            pageSize=1000
-        ).execute()
-
-        for f in res.get("files", []):
-            mime = f.get("mimeType", "")
-            if mime == "application/vnd.google-apps.folder":
-                if recursive:
-                    stack.append(f["id"])
-            else:
-                items.append(f)
-
-        # handle pagination (rare with 1000 pageSize, but safe)
-        page_token = res.get("nextPageToken")
-        while page_token:
+        page_token = None
+        while True:
             res = service.files().list(
                 q=f"'{fid}' in parents and trashed=false",
                 fields="nextPageToken, files(id,name,mimeType)",
@@ -180,15 +161,17 @@ def drive_list_folder_files(service, folder_id: str, recursive: bool = False) ->
                 pageToken=page_token
             ).execute()
             for f in res.get("files", []):
-                mime = f.get("mimeType", "")
-                if mime == "application/vnd.google-apps.folder":
+                mt = f.get("mimeType")
+                if mt == "application/vnd.google-apps.folder":
                     if recursive:
                         stack.append(f["id"])
                 else:
                     items.append(f)
             page_token = res.get("nextPageToken")
-
+            if not page_token:
+                break
     return items
+#=======================================================================================================================================================================#
 
 def drive_upload_bytes(service, folder_id: str, filename: str, data: bytes) -> str:
     """Upload a new file into folder_id. Returns file ID."""
@@ -197,18 +180,20 @@ def drive_upload_bytes(service, folder_id: str, filename: str, data: bytes) -> s
     body = {"name": filename, "parents": [folder_id]}
     created = service.files().create(body=body, media_body=media, fields="id").execute()
     return created["id"]
+#=======================================================================================================================================================================#
 
 def _ext_ok_for_tab(filename: str, tab: str) -> bool:
     ext = (filename.rsplit(".", 1)[-1].lower() if "." in filename else "")
     if tab == "dataset":
         return ext in ALLOWED_DATASET_EXTENSIONS
     return ext in ALLOWED_RESULTS_EXTENSIONS
+#=======================================================================================================================================================================#
 
 def _drive_urls(file_id: str) -> (str, str):
     preview = f"https://drive.google.com/file/d/{file_id}/preview"
     download = f"https://drive.google.com/uc?export=download&id={file_id}"
     return preview, download
-#==================================================#
+#=======================================================================================================================================================================#
 
 _SQLITE_RESERVED_PREFIXES = ("sqlite_",)
 
@@ -258,6 +243,7 @@ def tableize_basename(name: str) -> str:
         s = s[:120].rstrip("_")
 
     return f"{s}{ext_suffix}"
+#=======================================================================================================================================================================#
 
 def file_to_table_name(filename: str) -> str:
     """
@@ -266,145 +252,125 @@ def file_to_table_name(filename: str) -> str:
     """
     import os
     return tableize_basename(os.path.basename(filename or ""))
-#==================================================#
+#=======================================================================================================================================================================#
 
-def make_file_public(file_id: str):
-    """Ensure the file is readable by 'anyone with the link'."""
-    svc = get_drive_service()
-    try:
-        svc.permissions().create(
-            fileId=file_id,
-            body={"role": "reader", "type": "anyone"},
-            fields="id",
-        ).execute()
-    except Exception:
-        pass  # ignore if permission already exists
-#==================================================#
+# def make_file_public(file_id: str):
+#     """Ensure the file is readable by 'anyone with the link'."""
+#     svc = get_drive_service()
+#     try:
+#         svc.permissions().create(
+#             fileId=file_id,
+#             body={"role": "reader", "type": "anyone"},
+#             fields="id",
+#         ).execute()
+#     except Exception:
+#         pass  # ignore if permission already exists
+#=======================================================================================================================================================================#
+
+def ensure_uploads_log_columns():
+    """Backfill Drive-era columns if missing on older DBs."""
+    need = {"storage", "drive_id", "preview_url", "download_url", "source", "description"}
+    have = set()
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        try:
+            c.execute("PRAGMA table_info(uploads_log)")
+            for _cid, name, *_rest in c.fetchall():
+                have.add(name)
+        except Exception:
+            return  # table might not exist yet; schema helper below will create it
+
+        missing = list(need - have)
+        for col in missing:
+            if col in ("storage", "drive_id", "preview_url", "download_url", "source", "description"):
+                c.execute(f"ALTER TABLE uploads_log ADD COLUMN {col} TEXT")
+        conn.commit()
+#=======================================================================================================================================================================#
 
 def ensure_uploads_log_schema():
     """
-    Create/upgrade:
-      - uploads_log (public catalog)
-      - uploads_audit (history)
-      - audit triggers (insert/update/delete on uploads_log)
-    Never let a UNIQUE index error block creating the audit bits.
+    Create the catalog (uploads_log) + audit history (uploads_audit) + triggers.
+    Unique index creation is best-effort so audit never gets blocked by dupes.
     """
     with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
 
-        # 1) Public catalog (Drive-era columns included)
+        # Catalog (public pages read this)
         c.execute("""
-            CREATE TABLE IF NOT EXISTS uploads_log (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                property     TEXT NOT NULL,
-                tab          TEXT NOT NULL,      -- 'dataset' | 'results'
-                filename     TEXT NOT NULL,      -- human-visible label
-                uploaded_at  TEXT,               -- first/last touch, maintained by app
-                -- Drive-first metadata
-                storage      TEXT,               -- 'drive' | 'local' (legacy)
-                drive_id     TEXT,
-                preview_url  TEXT,
-                download_url TEXT,
-                source       TEXT,
-                description  TEXT,
-                UNIQUE(property, tab, filename)
-            )
+        CREATE TABLE IF NOT EXISTS uploads_log (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            property     TEXT NOT NULL,
+            tab          TEXT NOT NULL,      -- 'dataset' | 'results'
+            filename     TEXT NOT NULL,      -- display label (basename)
+            uploaded_at  TEXT,               -- first/last touch; app-maintained
+            -- Drive-first metadata (may be NULL on old/local rows)
+            storage      TEXT,               -- 'drive' | 'local'
+            drive_id     TEXT,
+            preview_url  TEXT,
+            download_url TEXT,
+            source       TEXT,
+            description  TEXT
+        )
         """)
 
-        # 2) Unique index: wrap so it never blocks later steps
-        try:
-            c.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
-                ON uploads_log(property, tab, filename)
-            """)
-        except sqlite3.OperationalError as e:
-            # e.g., duplicates present -> index creation fails. Log and continue.
-            app.logger.warning("ensure_uploads_log_schema: unique index creation skipped: %s", e)
+        # Make sure Drive-era columns exist on older DBs
+        ensure_uploads_log_columns()
 
-        # 3) Audit table (history)
+        # Audit table (history for /admin)
         c.execute("""
-            CREATE TABLE IF NOT EXISTS uploads_audit (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                property  TEXT NOT NULL,
-                tab       TEXT NOT NULL,
-                filename  TEXT NOT NULL,
-                action    TEXT NOT NULL,   -- add | update | delete
-                at        TEXT NOT NULL
-            )
+        CREATE TABLE IF NOT EXISTS uploads_audit (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            property  TEXT NOT NULL,
+            tab       TEXT NOT NULL,
+            filename  TEXT NOT NULL,
+            action    TEXT NOT NULL,   -- add | update | delete
+            at        TEXT NOT NULL
+        )
         """)
 
-        # 4) Triggers (create only if missing)
-        def ensure_trigger(name: str, ddl: str):
+        # Triggers (idempotent creation)
+        def ensure_trigger(name, ddl):
             c.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?", (name,))
             if not c.fetchone():
                 c.execute(ddl)
 
         ensure_trigger("trg_ul_insert_audit", """
-            CREATE TRIGGER trg_ul_insert_audit
-            AFTER INSERT ON uploads_log
-            BEGIN
-              INSERT INTO uploads_audit(property, tab, filename, action, at)
-              VALUES (NEW.property, NEW.tab, NEW.filename, 'add',
-                      COALESCE(NEW.uploaded_at, CURRENT_TIMESTAMP));
-            END;
-        """)
+        CREATE TRIGGER trg_ul_insert_audit
+        AFTER INSERT ON uploads_log
+        BEGIN
+          INSERT INTO uploads_audit(property, tab, filename, action, at)
+          VALUES (NEW.property, NEW.tab, NEW.filename, 'add',
+                  COALESCE(NEW.uploaded_at, CURRENT_TIMESTAMP));
+        END;""")
 
         ensure_trigger("trg_ul_update_audit", """
-            CREATE TRIGGER trg_ul_update_audit
-            AFTER UPDATE ON uploads_log
-            BEGIN
-              INSERT INTO uploads_audit(property, tab, filename, action, at)
-              VALUES (NEW.property, NEW.tab, NEW.filename, 'update',
-                      COALESCE(NEW.uploaded_at, CURRENT_TIMESTAMP));
-            END;
-        """)
+        CREATE TRIGGER trg_ul_update_audit
+        AFTER UPDATE ON uploads_log
+        BEGIN
+          INSERT INTO uploads_audit(property, tab, filename, action, at)
+          VALUES (NEW.property, NEW.tab, NEW.filename, 'update',
+                  COALESCE(NEW.uploaded_at, CURRENT_TIMESTAMP));
+        END;""")
 
         ensure_trigger("trg_ul_delete_audit", """
-            CREATE TRIGGER trg_ul_delete_audit
-            AFTER DELETE ON uploads_log
-            BEGIN
-              INSERT INTO uploads_audit(property, tab, filename, action, at)
-              VALUES (OLD.property, OLD.tab, OLD.filename, 'delete', CURRENT_TIMESTAMP);
-            END;
-        """)
+        CREATE TRIGGER trg_ul_delete_audit
+        AFTER DELETE ON uploads_log
+        BEGIN
+          INSERT INTO uploads_audit(property, tab, filename, action, at)
+          VALUES (OLD.property, OLD.tab, OLD.filename, 'delete', CURRENT_TIMESTAMP);
+        END;""")
 
-        conn.commit()
-#==================================================#
-
-def ensure_uploads_log_columns():
-    """Add missing Drive-era columns to uploads_log on old DBs."""
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-
-        # If the table itself doesn't exist yet, create the full schema first
-        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploads_log'")
-        if not c.fetchone():
-            ensure_uploads_log_schema()
-
-        c.execute("PRAGMA table_info(uploads_log)")
-        existing = {row[1] for row in c.fetchall()}
-
-        to_add = [
-            ("storage", "TEXT"),
-            ("drive_id", "TEXT"),
-            ("preview_url", "TEXT"),
-            ("download_url", "TEXT"),
-            ("source", "TEXT"),
-            ("description", "TEXT"),
-        ]
-        for col, typ in to_add:
-            if col not in existing:
-                c.execute(f"ALTER TABLE uploads_log ADD COLUMN {col} {typ}")
+        # Best-effort unique index enabling UPSERTs; don't block audit on failure
         try:
-            # Don’t fail the request if dupes exist; just try to enforce uniqueness.
             c.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
                 ON uploads_log(property, tab, filename)
             """)
-        except sqlite3.OperationalError:
-            pass  # ignore if duplicates still exist; you can run your /admin/fix_uploads_uniqueness later
+        except Exception as e:
+            app.logger.warning("ensure_uploads_log_schema: unique index creation skipped: %s", e)
+
         conn.commit()
-#==================================================#
+#=======================================================================================================================================================================#
 
 def dedupe_uploads_log():
     """Remove duplicate (property,tab,filename) rows and enforce unique index."""
@@ -446,7 +412,7 @@ def dedupe_uploads_log():
             # If this fails, we’ll at least not crash the app
             current_app.logger.warning("unique index create failed: %s", e)
         conn.commit()
-#==================================================#
+#=======================================================================================================================================================================#
 
 def auto_log_material_files():
     """
@@ -499,8 +465,7 @@ def auto_log_material_files():
         conn.commit()
 
     return {"status": "ok", "added_or_updated": added_or_updated}
-
-#==================================================#
+#=======================================================================================================================================================================#
               
 # Automation of import to sqlite3 database
 def auto_import_uploads():
@@ -586,12 +551,12 @@ def auto_import_uploads():
 
     print(f"auto_import_uploads: done, {imported} table(s) updated.")
     return imported
-#==================================================#
+#=======================================================================================================================================================================#
 
 # Run-once warm-up
 from threading import Lock
 
-_startup_done = False
+__startup_done = False
 _startup_lock = Lock()
 
 def _run_startup_tasks():
@@ -607,10 +572,6 @@ def _run_startup_tasks():
             ensure_uploads_log_columns()
         except Exception as e:
             app.logger.warning("ensure_uploads_log_columns: %s", e)
-        try:
-            dedupe_uploads_log()
-        except Exception as e:
-            app.logger.warning("dedupe_uploads_log: %s", e)
         _startup_done = True
 
 @app.before_request
@@ -618,9 +579,9 @@ def _startup_once():
     if not _startup_done:
         _run_startup_tasks()
         
-####################################### ========== ROUTES ==========#####################################
+###################################################################################========== ROUTES ==========############################################################
 
-#########################################################
+##############################################################################################################################################################
 
 # --- Public home + Admin SQL Query Tool (CRUD, multi-statement) ---
 def _list_user_tables():
@@ -636,7 +597,7 @@ def _list_user_tables():
         """)
         return [r[0] for r in cur.fetchall()]
 
-#########################################################
+##############################################################################################################################################################
 
 # Public home used by multiple templates (and health check lands here )
 @app.route("/", methods=["GET"])
@@ -645,14 +606,14 @@ def public_home():
     #tables = _list_user_tables()
     return render_template("landing.html")
 
-#########################################################
+##############################################################################################################################################################
 
 @app.route("/materials", methods=["GET"])
 def materials_portal():
     # Uses your templates/materials_portal.html
     return render_template("materials_portal.html")
 
-#########################################################
+##############################################################################################################################################################
 
 # SQL Query Tool (admin only, CRUD, multi-statement)
 DESTRUCTIVE_REGEX = re.compile(r"\b(drop|delete|update|alter|truncate)\b", re.IGNORECASE)
@@ -750,7 +711,7 @@ def query_sql():
         needs_confirm=needs_confirm,
     )
 
-#########################################################
+##############################################################################################################################################################
 
 # Admin only rescanning for duplicates and re-importing
 @app.route('/admin/rescan_uploads')
@@ -782,7 +743,7 @@ def rescan_uploads():
     except Exception as e:
         return jsonify({"status": f"auto_log_material_files failed: {e}"}), 500
     
-#########################################################
+##############################################################################################################################################################
 
 # -- Admin login/logout --
 @app.route('/login', methods=['GET', 'POST'])
@@ -802,7 +763,7 @@ def logout():
     flash("Logged out.")
     return redirect(url_for('public_home'))
 
-#########################################################
+##############################################################################################################################################################
 
 # --- Admin Dashboard (history-only) ---
 @app.route('/admin', methods=['GET'])
@@ -810,174 +771,113 @@ def admin_home():
     if not session.get('admin'):
         return redirect(url_for('login'))
 
-    # Ensure base schema exists (tables + triggers), but never crash this page
+    # Make sure catalog + audit schema exist (triggers are created here too)
+    ensure_uploads_log_schema()
     try:
-        ensure_uploads_log_schema()
+        ensure_uploads_log_columns()
     except Exception as e:
-        app.logger.warning("ensure_uploads_log_schema raised: %s", e)
+        app.logger.warning("ensure_uploads_log_columns : %s", e)
 
-    # Best effort: make sure Drive-era columns exist (storage, drive_id, etc.)
-    try:
-        ensure_uploads_log_columns()  # your existing helper that ALTER TABLE as needed
-    except Exception as e:
-        app.logger.warning("ensure_uploads_log_columns raised: %s", e)
-
-    # Guard: if audit table still missing (older DBs), create it quickly so page works
-    try:
-        with sqlite3.connect(DB_NAME) as conn:
-            c = conn.cursor()
-            c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='uploads_audit'")
-            if not c.fetchone():
-                c.execute("""
-                    CREATE TABLE IF NOT EXISTS uploads_audit (
-                        id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                        property  TEXT NOT NULL,
-                        tab       TEXT NOT NULL,
-                        filename  TEXT NOT NULL,
-                        action    TEXT NOT NULL,   -- add | update | delete
-                        at        TEXT NOT NULL
-                    )
-                """)
-                conn.commit()
-    except Exception as e:
-        app.logger.warning("guard-create uploads_audit failed: %s", e)
-
-    # Build the history table (don’t crash page if something’s off)
-    audit_rows = []
-    try:
-        with sqlite3.connect(DB_NAME) as conn:
-            c = conn.cursor()
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+        # If audit table is still empty, show an empty page gracefully
+        c.execute("""
+        SELECT name FROM sqlite_master
+        WHERE type='table' AND name='uploads_audit'
+        """)
+        if not c.fetchone():
+            audit_rows = []
+        else:
             c.execute("""
-                WITH hist AS (
-                  SELECT property, tab, filename,
-                         MIN(CASE WHEN action='add' THEN at END) AS first_added,
-                         MAX(at) AS last_event
-                    FROM uploads_audit
-                GROUP BY property, tab, filename
-                )
-                SELECT
-                  h.filename AS file_name,
-                  COALESCE(h.first_added, h.last_event) AS uploaded_at,
-                  CASE WHEN u.rowid IS NULL THEN 'Absent' ELSE 'Present' END AS public_view_status
-                FROM hist h
-                LEFT JOIN uploads_log u
-                       ON u.property=h.property AND u.tab=h.tab AND u.filename=h.filename
-                ORDER BY uploaded_at DESC, h.filename;
+            WITH hist AS (
+              SELECT property, tab, filename,
+                     MIN(CASE WHEN action='add' THEN at END) AS first_added,
+                     MAX(at) AS last_event
+                FROM uploads_audit
+            GROUP BY property, tab, filename
+            )
+            SELECT
+              h.filename AS file_name,
+              COALESCE(h.first_added, h.last_event) AS uploaded_at,
+              CASE WHEN u.rowid IS NULL THEN 'Absent' ELSE 'Present' END AS public_view_status
+            FROM hist h
+            LEFT JOIN uploads_log u
+                   ON u.property=h.property AND u.tab=h.tab AND u.filename=h.filename
+            ORDER BY uploaded_at DESC, h.filename;
             """)
             audit_rows = c.fetchall()
-    except Exception as e:
-        app.logger.warning("admin_home query failed: %s", e)
-        audit_rows = []
 
     return render_template('admin_home.html', audit_rows=audit_rows)
-#########################################################
+##############################################################################################################################################################
 
-@app.route("/admin/fix_uploads_uniqueness", methods=["GET", "POST"])
-def fix_uploads_uniqueness():
+@app.route("/admin/repair_uploads")
+def admin_repair_uploads():
     if not session.get("admin"):
         abort(403)
 
     stats = {}
-    try:
-        # The schema helper may fail while dups exist; ignore and continue.
+    with sqlite3.connect(DB_NAME) as conn:
+        c = conn.cursor()
+
+        # remove local rows (catalog is Drive-only)
+        c.execute("SELECT COUNT(*) FROM uploads_log WHERE storage IS NULL OR storage!='drive'")
+        stats["deleted_non_drive_rows"] = c.fetchone()[0]
+        c.execute("DELETE FROM uploads_log WHERE storage IS NULL OR storage!='drive'")
+
+        # dedupe on (property,tab,filename)
+        deleted = 0
+        used_window = False
         try:
-            ensure_uploads_log_schema()
+            c.execute("""
+                WITH ranked AS (
+                  SELECT rowid,
+                         property, tab, filename,
+                         COALESCE(uploaded_at,'') AS ts,
+                         ROW_NUMBER() OVER (
+                           PARTITION BY property, tab, filename
+                           ORDER BY ts DESC, rowid DESC
+                         ) AS rn
+                  FROM uploads_log
+                )
+                DELETE FROM uploads_log
+                 WHERE rowid IN (SELECT rowid FROM ranked WHERE rn > 1);
+            """)
+            deleted = conn.total_changes
+            used_window = True
+        except sqlite3.OperationalError:
+            c.execute("""
+                DELETE FROM uploads_log
+                 WHERE rowid NOT IN (
+                   SELECT MAX(rowid)
+                     FROM uploads_log
+                    GROUP BY property, tab, filename
+                 );
+            """)
+            deleted = conn.total_changes
+
+        stats["duplicates_deleted"] = deleted
+        stats["used_window_fn"] = used_window
+
+        # unique index (best effort)
+        try:
+            c.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
+                ON uploads_log(property, tab, filename)
+            """)
+            stats["unique_index"] = "ok"
         except Exception as e:
-            app.logger.warning("ensure_uploads_log_schema raised (continuing): %s", e)
+            stats["unique_index"] = f"failed: {e}"
 
-        with sqlite3.connect(DB_NAME) as conn:
-            c = conn.cursor()
+        conn.commit()
 
-            rows_before = c.execute("SELECT COUNT(*) FROM uploads_log").fetchone()[0]
-            dup_groups_before = c.execute("""
-                SELECT COUNT(*)
-                  FROM (
-                    SELECT property, tab, filename, COUNT(*) c
-                      FROM uploads_log
-                     GROUP BY property, tab, filename
-                    HAVING c > 1
-                  )
-            """).fetchone()[0]
-
-            deleted = 0
-            used_window = False
-
-            if dup_groups_before > 0:
-                # Prefer window-function method (keeps newest by uploaded_at, then highest rowid)
-                try:
-                    c.execute("""
-                        WITH ranked AS (
-                          SELECT rowid,
-                                 property, tab, filename,
-                                 COALESCE(uploaded_at, '') AS ts,
-                                 ROW_NUMBER() OVER (
-                                   PARTITION BY property, tab, filename
-                                   ORDER BY ts DESC, rowid DESC
-                                 ) AS rn
-                          FROM uploads_log
-                        )
-                        DELETE FROM uploads_log
-                         WHERE rowid IN (SELECT rowid FROM ranked WHERE rn > 1);
-                    """)
-                    used_window = True
-                    deleted = conn.total_changes
-                except sqlite3.OperationalError:
-                    # Fallback for older SQLite (no window functions):
-                    # keep the earliest row per key (good enough to enforce uniqueness)
-                    c.execute("""
-                        DELETE FROM uploads_log
-                         WHERE rowid NOT IN (
-                           SELECT MIN(rowid)
-                             FROM uploads_log
-                            GROUP BY property, tab, filename
-                         );
-                    """)
-                    deleted = conn.total_changes
-
-            # Now enforce uniqueness with an index.
-            # If dups remain for any reason, this will raise; we’ll report below.
-            try:
-                c.execute("""
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_unique
-                    ON uploads_log(property, tab, filename)
-                """)
-            except sqlite3.OperationalError as e:
-                app.logger.warning("creating unique index failed: %s", e)
-
-            conn.commit()
-
-            rows_after = c.execute("SELECT COUNT(*) FROM uploads_log").fetchone()[0]
-            dup_groups_after = c.execute("""
-                SELECT COUNT(*)
-                  FROM (
-                    SELECT property, tab, filename, COUNT(*) c
-                      FROM uploads_log
-                     GROUP BY property, tab, filename
-                    HAVING c > 1
-                  )
-            """).fetchone()[0]
-
-        stats.update({
-            "rows_before": rows_before,
-            "duplicate_groups_before": dup_groups_before,
-            "deleted_rows": deleted,
-            "used_window_delete": used_window,
-            "rows_after": rows_after,
-            "duplicate_groups_after": dup_groups_after,
-            "status": "ok" if dup_groups_after == 0 else "still_has_duplicates"
-        })
-        return jsonify(stats)
-    except Exception as e:
-        return jsonify({"status": "error", "error": str(e)}), 500    
-    
-#########################################################
+    return jsonify(stats)   
+##############################################################################################################################################################
 
 @app.route("/healthz")
 def healthz():
     # Must be super fast and always 200 so Fly can mark the machine healthy
     return "ok", 200
-
-#########################################################
+##############################################################################################################################################################
 
 @app.route("/diag/routes")
 def diag_routes():
@@ -986,10 +886,8 @@ def diag_routes():
         abort(403)
     rules = sorted([str(r) for r in app.url_map.iter_rules()])
     return jsonify({"routes": rules})
+##############################################################################################################################################################
 
-#########################################################
-
-# -- View and import (admin + public, Drive-only adds) --
 @app.route('/materials/<property_name>/<tab>', methods=['GET', 'POST'])
 def property_detail(property_name, tab):
     # ---- titles / guards ----
@@ -1006,21 +904,25 @@ def property_detail(property_name, tab):
     edit_message = ""
     is_admin = bool(session.get('admin'))
 
-    # Ensure columns exist on old DBs (adds storage/drive_id/preview_url/download_url/source/description if missing)
+    # Ensure schema/columns exist
+    try:
+        ensure_uploads_log_schema()
+    except Exception as e:
+        app.logger.warning("ensure_uploads_log_schema: %s", e)
     try:
         ensure_uploads_log_columns()
     except Exception as e:
-        app.logger.warning("ensure_uploads_log_columns raised: %s", e)
+        app.logger.warning("ensure_uploads_log_columns: %s", e)
 
-    # ---- admin POST handlers ----
+    # ---- admin POST handlers (Drive-first only) ----
     if is_admin and request.method == 'POST':
         try:
-            # 1) Add a single Drive FILE by link/ID
+            # 1) Add a single Drive file by link/ID
             if request.form.get('add_drive'):
                 drive_link = (request.form.get('drive_link') or '').strip()
                 label = (request.form.get('label') or '').strip()
                 new_source = (request.form.get('row_source') or '').strip() if tab == 'dataset' else None
-                new_desc   = (request.form.get('row_description') or '').strip()
+                new_desc = (request.form.get('row_description') or '').strip()
 
                 if not _ext_ok_for_tab(label, tab):
                     if tab == 'dataset':
@@ -1033,6 +935,16 @@ def property_detail(property_name, tab):
                         upload_message = "Invalid Google Drive link or ID."
                     else:
                         preview_url, download_url = _drive_urls(file_id)
+                        # Best effort: ensure public permission
+                        try:
+                            svc = get_drive_service()
+                            svc.permissions().create(
+                                fileId=file_id,
+                                body={"role": "reader", "type": "anyone"},
+                                fields="id"
+                            ).execute()
+                        except Exception:
+                            pass
                         with sqlite3.connect(DB_NAME) as conn:
                             c = conn.cursor()
                             c.execute(
@@ -1057,7 +969,7 @@ def property_detail(property_name, tab):
                             conn.commit()
                         upload_message = f"Added Drive item '{label}'."
 
-            # 2) Link a Drive FOLDER → import all allowed files directly under it
+            # 2) Link a Drive FOLDER → import all allowed files (recursive)
             elif request.form.get('link_folder'):
                 folder_link = (request.form.get('drive_folder_link') or '').strip()
                 folder_id = _drive_extract_id(folder_link)
@@ -1070,11 +982,20 @@ def property_detail(property_name, tab):
                     with sqlite3.connect(DB_NAME) as conn:
                         c = conn.cursor()
                         for f in files:
-                            name = f.get("name") or ""
+                            name = (f.get("name") or "").strip()
                             if not _ext_ok_for_tab(name, tab):
                                 continue
                             fid = f["id"]
                             preview_url, download_url = _drive_urls(fid)
+                            # Make public best-effort
+                            try:
+                                service.permissions().create(
+                                    fileId=fid,
+                                    body={"role": "reader", "type": "anyone"},
+                                    fields="id"
+                                ).execute()
+                            except Exception:
+                                pass
                             c.execute(
                                 """
                                 INSERT INTO uploads_log
@@ -1096,9 +1017,9 @@ def property_detail(property_name, tab):
                         conn.commit()
                     upload_message = f"Linked folder: imported {imported} item(s)."
 
-            # 3) Upload a ZIP → push files to Drive <root>/<property>/<tab> → log them
+            # 3) Upload a ZIP → push contents to Drive <root>/<property>/<tab> → import
             elif request.form.get('zip_upload'):
-                if 'zipfile' not in request.files or not request.files['zipfile'].filename:
+                if 'zipfile' not in request.files or request.files['zipfile'].filename == '':
                     upload_message = "No ZIP file selected."
                 else:
                     zf = request.files['zipfile']
@@ -1112,7 +1033,6 @@ def property_detail(property_name, tab):
                         data = zf.read()
                         z = zipfile.ZipFile(io.BytesIO(data))
                         uploaded = 0
-
                         with sqlite3.connect(DB_NAME) as conn:
                             c = conn.cursor()
                             for info in z.infolist():
@@ -1124,6 +1044,15 @@ def property_detail(property_name, tab):
                                 file_bytes = z.read(info)
                                 fid = drive_upload_bytes(service, target_folder_id, base, file_bytes)
                                 preview_url, download_url = _drive_urls(fid)
+                                # Make public best-effort
+                                try:
+                                    service.permissions().create(
+                                        fileId=fid,
+                                        body={"role": "reader", "type": "anyone"},
+                                        fields="id"
+                                    ).execute()
+                                except Exception:
+                                    pass
                                 c.execute(
                                     """
                                     INSERT INTO uploads_log
@@ -1143,7 +1072,6 @@ def property_detail(property_name, tab):
                                 )
                                 uploaded += 1
                             conn.commit()
-
                         upload_message = f"Uploaded {uploaded} file(s) from ZIP to Drive."
                     except Exception as e:
                         upload_message = f"ZIP upload failed: {e}"
@@ -1175,50 +1103,34 @@ def property_detail(property_name, tab):
                         )
                     conn.commit()
                 edit_message = f"Updated info for {row_filename}."
+
         except Exception as e:
             upload_message = f"Error: {e}"
 
-    # ---- fetch current uploads (public catalog) ----
+    # ---- fetch current uploads (Drive-only for property pages) ----
     with sqlite3.connect(DB_NAME) as conn:
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
         c.execute(
             """
-            SELECT
-                filename,
-                COALESCE(source,'')        AS source,
-                COALESCE(description,'')   AS description,
-                uploaded_at,
-                COALESCE(storage,'local')  AS storage,
-                COALESCE(preview_url,'')   AS preview_url,
-                COALESCE(download_url,'')  AS download_url
+            SELECT filename,
+                   COALESCE(source,'')        AS source,
+                   COALESCE(description,'')   AS description,
+                   uploaded_at,
+                   COALESCE(storage,'local')  AS storage,
+                   COALESCE(preview_url,'')   AS preview_url,
+                   COALESCE(download_url,'')  AS download_url
               FROM uploads_log
              WHERE property = ? AND tab = ?
+               AND storage = 'drive'
           ORDER BY uploaded_at DESC, filename
             """,
             (property_name, tab),
         )
         uploads = c.fetchall()
 
-    # Map local dataset filenames to SQL table names (only if the table exists)
+    # No local datasets shown anymore; keep for template compatibility
     table_map = {}
-    if tab == 'dataset':
-        with sqlite3.connect(DB_NAME) as conn:
-            existing = {
-                r[0] for r in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                )
-            }
-
-        for row in uploads:
-            # sqlite3.Row is dict-like; 'storage' may be missing on older rows
-            storage_val = (row['storage'] if 'storage' in row.keys() and row['storage'] else 'local')
-            if storage_val != 'drive':
-                fname = row['filename']  # always selected in the query
-                if fname and (fname.endswith('.csv') or fname.endswith('.npy')):
-                    tname = file_to_table_name(fname)
-                    if tname in existing:
-                        table_map[fname] = tname
 
     return render_template(
         'property_detail.html',
@@ -1231,7 +1143,7 @@ def property_detail(property_name, tab):
         admin=is_admin,
         table_map=table_map,
     )    
-#########################################################
+##############################################################################################################################################################
 
 @app.route('/uploads/<path:filename>')
 def uploaded_file(filename):
@@ -1241,7 +1153,7 @@ def uploaded_file(filename):
         print('File not found:', full_path)
         abort(404)
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-#########################################################
+##############################################################################################################################################################
 
 @app.route('/view_result/<property_name>/<tab>/<path:filename>')
 def view_result_file(property_name, tab, filename):
@@ -1261,8 +1173,7 @@ def extract_drive_id(link):
     if match:
         return match.group(1)
     raise ValueError("Invalid Drive link")
-
-#########################################################
+##############################################################################################################################################################
 
 @app.route('/clips')
 def public_clips():
@@ -1296,8 +1207,7 @@ def public_clips():
     pass
 
     return render_template('clips.html', clips=clips, admin=admin)
-
-#########################################################
+##############################################################################################################################################################
 
 @app.route('/view_table/<path:filename>', methods=['GET'])
 def view_table(filename):
@@ -1350,8 +1260,7 @@ def view_table(filename):
         imported_table=table,
         admin=admin
     )
-
-#########################################################
+##############################################################################################################################################################
 
 @app.route('/dataset/<table>')
 def public_view(table):
@@ -1388,7 +1297,7 @@ def public_view(table):
             imported_table=table,
             admin=False
         ), 200
-#########################################################
+##############################################################################################################################################################
 
 @app.route('/download/<table>')
 def download(table):
@@ -1397,8 +1306,7 @@ def download(table):
     csv_path = os.path.join(UPLOAD_FOLDER, f"{table}.csv")
     df.to_csv(csv_path, index=False)
     return send_from_directory(UPLOAD_FOLDER, f"{table}.csv", as_attachment=True)
-
-#########################################################
+##############################################################################################################################################################
 
 @app.route('/migrate_csv_to_db')
 def migrate_csv_to_db():
@@ -1442,8 +1350,7 @@ def migrate_csv_to_db():
         return "✅ Table recreated and data loaded from CSV!"
     except Exception as e:
         return f"❌ Error: {e}"
-    
-#########################################################
+##############################################################################################################################################################
 
 # SEARCH ROUTE
 @app.route('/search')
@@ -1479,8 +1386,7 @@ def search():
         except Exception:
             clips = []
     return render_template('search_results.html', query=query, materials=materials, clips=clips)
-
-#########################################################
+##############################################################################################################################################################
 
 # DELETE CLIP
 @app.route('/delete_clip/<int:clip_id>', methods=['POST'])
@@ -1500,8 +1406,7 @@ def delete_clip(clip_id):
             c.execute("DELETE FROM music_clips WHERE id = ?", (clip_id,))
             conn.commit()
     return redirect(url_for('public_clips'))
-
-#########################################################
+##############################################################################################################################################################
 
 # DELETE DATASET/RESULT FILE
 from urllib.parse import unquote
@@ -1537,8 +1442,7 @@ def delete_dataset_file(property_name, tab, filename):
         conn.commit()
 
     return redirect(url_for('property_detail', property_name=property_name, tab=tab))
-
-#########################################################
+##############################################################################################################################################################
 
 @app.route('/add_drive_clip', methods=['GET', 'POST'])
 def add_drive_clip():
@@ -1579,8 +1483,7 @@ def add_drive_clip():
             message = "❌ Invalid link or missing title."
 
     return render_template('add_drive_clip.html', message=message)
-
-#########################################################
+##############################################################################################################################################################
 
             # ========== MAIN ==========
 if __name__ == '__main__':
