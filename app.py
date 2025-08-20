@@ -555,28 +555,42 @@ def auto_import_uploads():
 #=======================================================================================================================================================================#
 
 # Run-once warm-up
-from threading import Lock
+import threading
 
-__startup_done = False
-_startup_lock = Lock()
+_startup_done = False
+_startup_lock = threading.Lock()
 
 def _run_startup_tasks():
+    """Idempotent, best-effort startup initialization."""
     global _startup_done
     with _startup_lock:
         if _startup_done:
             return
         try:
-            ensure_uploads_log_schema()
-        except Exception as e:
-            app.logger.warning("ensure_uploads_log_schema: %s", e)
-        try:
-            ensure_uploads_log_columns()
-        except Exception as e:
-            app.logger.warning("ensure_uploads_log_columns: %s", e)
-        _startup_done = True
+            try:
+                ensure_uploads_log_schema()
+            except Exception as e:
+                app.logger.warning("ensure_uploads_log_schema at startup: %s", e)
+
+            try:
+                ensure_uploads_log_columns()
+            except Exception as e:
+                app.logger.warning("ensure_uploads_log_columns at startup: %s", e)
+
+            # (Optional) If >> to clean up old local rows or dedupe:
+            # try:
+            #     dedupe_uploads_log()
+            # except Exception as e:
+            #     app.logger.warning("dedupe_uploads_log at startup: %s", e)
+
+        finally:
+            _startup_done = True
 
 @app.before_request
 def _startup_once():
+    # Keep health checks and static super fast
+    if request.endpoint in ("healthz", "static"):
+        return
     if not _startup_done:
         _run_startup_tasks()
         
