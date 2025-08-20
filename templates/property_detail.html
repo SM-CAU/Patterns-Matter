@@ -154,11 +154,16 @@
                 {% if download_url %} | <a href="{{ download_url }}" target="_blank">Download</a>{% endif %}
               {% else %}
                 {% if tab == 'dataset' and (filename.endswith('.csv') or filename.endswith('.npy')) %}
-                  <a href="{{ url_for('public_view', table=table_map.get(filename)) }}" target="_blank">View</a>
+                  {% set tname = table_map.get(filename) %}
+                  {% if tname %}
+                    <a href="{{ url_for('public_view', table=tname) }}" target="_blank">View</a>
+                  {% else %}
+                    <span class="small">No table yet</span>
+                  {% endif %}
                 {% elif tab == 'results' %}
                   <a href="{{ url_for('view_result_file', property_name=property_name, tab=tab, filename=filename) }}" target="_blank">View</a>
                 {% endif %}
-                 | <a href="{{ url_for('uploaded_file', filename=property_name + '/' + tab + '/' + filename) }}" download>Download</a>
+                  | <a href="{{ url_for('uploaded_file', filename=property_name ~ '/' ~ tab ~ '/' ~ filename) }}" download>Download</a>
               {% endif %}
 
               {% if admin %}

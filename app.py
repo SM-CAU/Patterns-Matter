@@ -141,24 +141,53 @@ def drive_ensure_property_tab_folder(service, root_folder_id: str, prop: str, ta
     tab_id = drive_find_or_create_folder(service, prop_id, tab)
     return tab_id
 
-def drive_list_folder_files(service, folder_id: str) -> List[Dict]:
+def drive_list_folder_files(service, folder_id: str, recursive: bool = False) -> List[Dict]:
     """
-    List non-trashed files (id,name,mimeType) directly under folder_id.
-    We rely on filename extension for filtering by tab.
+    List non-trashed files (id,name,mimeType) under folder_id.
+    If recursive=True, also walk all subfolders.
     """
-    items = []
-    page_token = None
-    while True:
+    items: List[Dict] = []
+    stack = [folder_id]
+    seen_folders = set()
+
+    while stack:
+        fid = stack.pop()
+        if fid in seen_folders:
+            continue
+        seen_folders.add(fid)
+
         res = service.files().list(
-            q=f"'{folder_id}' in parents and trashed=false",
+            q=f"'{fid}' in parents and trashed=false",
             fields="nextPageToken, files(id,name,mimeType)",
-            pageSize=1000,
-            pageToken=page_token
+            pageSize=1000
         ).execute()
-        items.extend(res.get("files", []))
+
+        for f in res.get("files", []):
+            mime = f.get("mimeType", "")
+            if mime == "application/vnd.google-apps.folder":
+                if recursive:
+                    stack.append(f["id"])
+            else:
+                items.append(f)
+
+        # handle pagination (rare with 1000 pageSize, but safe)
         page_token = res.get("nextPageToken")
-        if not page_token:
-            break
+        while page_token:
+            res = service.files().list(
+                q=f"'{fid}' in parents and trashed=false",
+                fields="nextPageToken, files(id,name,mimeType)",
+                pageSize=1000,
+                pageToken=page_token
+            ).execute()
+            for f in res.get("files", []):
+                mime = f.get("mimeType", "")
+                if mime == "application/vnd.google-apps.folder":
+                    if recursive:
+                        stack.append(f["id"])
+                else:
+                    items.append(f)
+            page_token = res.get("nextPageToken")
+
     return items
 
 def drive_upload_bytes(service, folder_id: str, filename: str, data: bytes) -> str:
@@ -557,7 +586,6 @@ def auto_import_uploads():
 
     print(f"auto_import_uploads: done, {imported} table(s) updated.")
     return imported
-
 #==================================================#
 
 # Run-once warm-up
@@ -590,7 +618,6 @@ def _startup_once():
     if not _startup_done:
         _run_startup_tasks()
         
-
 ####################################### ========== ROUTES ==========#####################################
 
 #########################################################
@@ -1038,7 +1065,7 @@ def property_detail(property_name, tab):
                     upload_message = "Invalid Drive folder link or ID."
                 else:
                     service = get_drive_service()
-                    files = drive_list_folder_files(service, folder_id)
+                    files = drive_list_folder_files(service, folder_id, recursive=True)
                     imported = 0
                     with sqlite3.connect(DB_NAME) as conn:
                         c = conn.cursor()
