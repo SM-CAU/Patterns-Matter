@@ -6,6 +6,7 @@ import os
 import pandas as pd
 import numpy as np
 import sqlite3
+import secrets
 
 from werkzeug.utils import secure_filename
 import datetime
@@ -15,21 +16,48 @@ import csv
 import io, base64, zipfile
 from typing import List, Dict, Optional
 
-# ========== SETTINGS ==========
 
-UPLOAD_FOLDER = 'uploads'
-DB_NAME = 'patterns-matter.db' # SQLite database file
-ADMIN_PASSWORD = 'IronMa1deN!'
+# ========== SETTINGS (Drive-only materials; DB persisted on Fly volume) ==========
+# Persist app state (SQLite DB, optional legacy uploads) on Fly's volume
+DATA_DIR = os.environ.get("DATA_DIR", "/data")
+os.makedirs(DATA_DIR, exist_ok=True)
 
-ALLOWED_DATASET_EXTENSIONS = {'csv', 'npy'}
-ALLOWED_RESULTS_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'pdf', 'docx'}
-ALLOWED_MUSIC_EXTENSIONS = {'mp3', 'wav', 'm4a', 'ogg', 'mp4'}
+# SQLite DB lives on the volume so admin history / catalog survive deploys
+DB_NAME = os.path.join(DATA_DIR, "patterns-matter.db")
+
+# Local uploads folder (not used for Drive materials, but harmless to keep)
+UPLOAD_FOLDER = os.path.join(DATA_DIR, "uploads")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+ALLOWED_DATASET_EXTENSIONS = {"csv", "npy"}
+ALLOWED_RESULTS_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "pdf", "docx"}
+ALLOWED_MUSIC_EXTENSIONS   = {"mp3", "wav", "m4a", "ogg", "mp4"}
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.secret_key = 'IronMa1deN!'
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
+# ---------- Secrets: require in prod, friendly defaults in dev ----------
+IS_PROD = bool(os.getenv("FLY_APP_NAME"))
+
+def _require_env(name: str) -> str:
+    val = os.getenv(name)
+    if not val:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return val
+
+if IS_PROD:
+    # In production, these MUST be set via Fly secrets:
+    #   fly secrets set ADMIN_PASSWORD='...' FLASK_SECRET_KEY='...'
+    ADMIN_PASSWORD = _require_env("ADMIN_PASSWORD")
+    app.secret_key = _require_env("FLASK_SECRET_KEY")
+else:
+    # Local dev fallbacks (or read from a local .env before this block)
+    ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "devpassword")
+    app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-keep-local")
+
+# Google Drive scope for the Service Account (secrets provided via Fly)
 GDRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+
 
 # ---------- Utility Functions ----------
 
