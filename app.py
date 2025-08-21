@@ -1032,7 +1032,8 @@ def property_detail(property_name, tab):
                         conn.commit()
                     upload_message = f"Linked folder: imported {imported} item(s)."
 
-            # 3) Upload a ZIP → push contents to Drive <root>/<property>/<tab> → import
+            # 3) Upload a ZIP → push contents to Drive <root>/<property>/<tab> → import--Right now I am not using this due to not having a shared drive in google workspace.
+            # When I do use workspace, this Zip branch must be further refined such that it becomes deterministic on computed parent folder.
             elif request.form.get('zip_upload'):
                 if 'zipfile' not in request.files or request.files['zipfile'].filename == '':
                     upload_message = "No ZIP file selected."
