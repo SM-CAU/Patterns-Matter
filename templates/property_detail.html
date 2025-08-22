@@ -68,18 +68,18 @@
 
         <!-- Link a FOLDER (import all allowed files) -->
         <form method="post" class="stack" style="margin-bottom:1em;">
-          <div class="small">Or link a Drive FOLDER (we’ll import all allowed files, including subfolders).</div>
+          <div class="small">Or link a Drive FOLDER (we’ll import all allowed files, incl. subfolders).</div>
           <div>
             <input type="text" name="drive_folder_link" placeholder="Drive FOLDER link or folder ID" style="width:560px" required>
             <button type="submit" name="link_folder" value="1">Link Folder</button>
           </div>
         </form>
 
-        <!-- Upload a ZIP and push to Drive (currently optional) -->
+        <!-- Upload a ZIP and push to Drive -->
         <form method="post" enctype="multipart/form-data" class="stack">
           <div class="small">Or upload a .zip; allowed files inside will be uploaded to Drive automatically.</div>
           <div>
-            <input type="file" name="zipfile" accept=".zip">
+            <input type="file" name="zipfile" accept=".zip" required>
             <button type="submit" name="zip_upload" value="1">Upload ZIP to Drive</button>
           </div>
         </form>
@@ -108,6 +108,7 @@
           {% set uploaded_at = (row.uploaded_at if row.uploaded_at is defined else row['uploaded_at']) %}
           {% set preview_url = (row.preview_url if row.preview_url is defined else row['preview_url']) %}
           {% set download_url = (row.download_url if row.download_url is defined else row['download_url']) %}
+          {% set form_id = 'f_' ~ loop.index %}
 
           <tr>
             <td>{{ filename }}</td>
@@ -115,9 +116,8 @@
             {% if tab == 'dataset' %}
               <td>
                 {% if admin %}
-                  <form method="post" class="row-edit" style="display:inline;">
-                    <input type="hidden" name="row_filename" value="{{ filename }}">
-                    <input type="text" name="row_source" value="{{ source or '' }}" size="18">
+                  <!-- This input belongs to the row form via the HTML5 'form' attribute -->
+                  <input type="text" name="row_source" form="{{ form_id }}" value="{{ source or '' }}" size="18">
                 {% else %}
                   {{ source or '' }}
                 {% endif %}
@@ -126,17 +126,15 @@
 
             <td>
               {% if admin %}
-                {% if tab == 'dataset' %}
+                <!-- One form per row; keeps page from reloading via JS -->
+                <form id="{{ form_id }}" class="row-edit-form"
+                      action="{{ url_for('materials_edit_row', property_name=property_name, tab=tab) }}"
+                      method="post" style="display:inline;">
+                  <input type="hidden" name="row_filename" value="{{ filename }}">
                   <input type="text" name="row_description" value="{{ description or '' }}" size="22">
                   <button type="submit" name="edit_row" value="1" style="margin-left:6px;">Save</button>
-                  </form>
-                {% else %}
-                  <form method="post" class="row-edit" style="display:inline;">
-                    <input type="hidden" name="row_filename" value="{{ filename }}">
-                    <input type="text" name="row_description" value="{{ description or '' }}" size="22">
-                    <button type="submit" name="edit_row" value="1" style="margin-left:6px;">Save</button>
-                  </form>
-                {% endif %}
+                  <span class="save-result" style="margin-left:.5em;font-size:.9em;"></span>
+                </form>
               {% else %}
                 {{ description or '' }}
               {% endif %}
@@ -150,20 +148,20 @@
 
             <td>
               {% if (storage or 'local') == 'drive' %}
-                {% if preview_url %}<a href="{{ preview_url }}" target="_blank" rel="noopener">View</a>{% endif %}
-                {% if download_url %} | <a href="{{ download_url }}" target="_blank" rel="noopener">Download</a>{% endif %}
+                {% if preview_url %}<a href="{{ preview_url }}" target="_blank">View</a>{% endif %}
+                {% if download_url %} | <a href="{{ download_url }}" target="_blank">Download</a>{% endif %}
               {% else %}
                 {% if tab == 'dataset' and (filename.endswith('.csv') or filename.endswith('.npy')) %}
                   {% set tname = table_map.get(filename) %}
                   {% if tname %}
-                    <a href="{{ url_for('public_view', table=tname) }}" target="_blank" rel="noopener">View</a>
+                    <a href="{{ url_for('public_view', table=tname) }}" target="_blank">View</a>
                   {% else %}
                     <span class="small">No table yet</span>
                   {% endif %}
                 {% elif tab == 'results' %}
-                  <a href="{{ url_for('view_result_file', property_name=property_name, tab=tab, filename=filename) }}" target="_blank" rel="noopener">View</a>
+                  <a href="{{ url_for('view_result_file', property_name=property_name, tab=tab, filename=filename) }}" target="_blank">View</a>
                 {% endif %}
-                  | <a href="{{ url_for('uploaded_file', filename=property_name ~ '/' ~ tab ~ '/' ~ filename) }}" download>Download</a>
+                 | <a href="{{ url_for('uploaded_file', filename=property_name ~ '/' ~ tab ~ '/' ~ filename) }}" download>Download</a>
               {% endif %}
 
               {% if admin %}
@@ -190,33 +188,35 @@
 
   {% if admin %}
   <script>
-    // Intercept per-row Save to avoid page reload (preserves other unsaved edits)
-    document.querySelectorAll('form.row-edit').forEach(function(form) {
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.row-edit-form').forEach(function (form) {
       form.addEventListener('submit', async function (e) {
         e.preventDefault();
-        const fd = new FormData(form);
-        // Ensure the intent flag is present
-        if (!fd.has('edit_row')) fd.append('edit_row', '1');
-        const btn = form.querySelector('button[type="submit"]');
-        const old = btn.textContent;
-        btn.disabled = true;
-
+        const btn = form.querySelector('button[type=submit]');
+        const result = form.querySelector('.save-result');
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
         try {
-          const resp = await fetch(location.href, {
+          const fd = new FormData(form);
+          const resp = await fetch(form.action, {
             method: 'POST',
             body: fd,
             headers: { 'X-Requested-With': 'XMLHttpRequest' }
           });
-          let data = {};
-          try { data = await resp.json(); } catch { /* ignore */ }
-          btn.textContent = data.ok ? 'Saved ✓' : 'Saved';
+          const data = await resp.json();
+          if (data.ok) {
+            if (result) result.textContent = 'Saved ✓';
+          } else {
+            if (result) result.textContent = 'Error: ' + (data.error || 'failed');
+          }
         } catch (err) {
-          btn.textContent = 'Error';
+          if (result) result.textContent = 'Error: ' + err;
+        } finally {
+          if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+          setTimeout(() => { if (result) result.textContent = ''; }, 2500);
         }
-
-        setTimeout(() => { btn.disabled = false; btn.textContent = old; }, 1200);
       });
     });
+  });
   </script>
   {% endif %}
 </body>

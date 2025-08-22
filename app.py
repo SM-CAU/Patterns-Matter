@@ -1199,6 +1199,42 @@ def property_detail(property_name, tab):
     )    
 ##############################################################################################################################################################
 
+# NEW: JSON endpoint to save one row without full-page reload
+@app.route('/materials/<property_name>/<tab>/edit', methods=['POST'])
+def materials_edit_row(property_name, tab):
+    if not session.get('admin'):
+        return jsonify({"ok": False, "error": "not_authorized"}), 403
+    if tab not in ('dataset', 'results'):
+        return jsonify({"ok": False, "error": "bad_tab"}), 400
+
+    row_filename = (request.form.get('row_filename') or '').strip()
+    if not row_filename:
+        return jsonify({"ok": False, "error": "missing_filename"}), 400
+
+    new_desc = (request.form.get('row_description') or '').strip()
+
+    try:
+        with sqlite3.connect(DB_NAME) as conn:
+            c = conn.cursor()
+            if tab == 'dataset':
+                new_source = (request.form.get('row_source') or '').strip()
+                c.execute("""
+                    UPDATE uploads_log
+                       SET source = ?, description = ?
+                     WHERE property=? AND tab=? AND filename=? AND storage='drive'
+                """, (new_source, new_desc, property_name, tab, row_filename))
+            else:
+                c.execute("""
+                    UPDATE uploads_log
+                       SET description = ?
+                     WHERE property=? AND tab=? AND filename=? AND storage='drive'
+                """, (new_desc, property_name, tab, row_filename))
+            conn.commit()
+        return jsonify({"ok": True, "message": f"Saved: {row_filename}"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+##############################################################################################################################################################
+
 @app.route('/uploads/<path:filename>')
 def uploaded_file(filename):
     full_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
