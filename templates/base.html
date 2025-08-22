@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  {% set site_name = "Patterns Matter" %}
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>{% block title %}{{ site_name }}{% endblock %}</title>
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+  <!-- Favicons / Touch icons (put your own images in /static) -->
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="any">
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon-32.png') }}" sizes="32x32">
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon-16.png') }}" sizes="16x16">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+
+  <!-- Basic theme meta -->
+  <meta name="theme-color" content="#2a6">
+  <meta name="application-name" content="{{ site_name }}">
+
+  <!-- Social preview (you can override page_* vars in each template) -->
+  {% set page_title = page_title|default(site_name) %}
+  {% set page_description = page_description|default("Datasets and results for materials properties.") %}
+  {% set page_image = page_image|default(url_for('static', filename='og-image.png', _external=True)) %}
+
+  <meta property="og:title" content="{{ page_title }}">
+  <meta property="og:description" content="{{ page_description }}">
+  <meta property="og:image" content="{{ page_image }}">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="{{ request.url_root|trim('/') }}">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ page_title }}">
+  <meta name="twitter:description" content="{{ page_description }}">
+  <meta name="twitter:image" content="{{ page_image }}">
+
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  <!-- global flash messages -->
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      <div style="max-width:1200px;margin:1em auto;">
+        {% for m in messages %}
+          <div style="background:#204f2a;color:#caffda;padding:.6em .9em;border-radius:8px;margin-bottom:.5em;">
+            {{ m }}
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+</body>
+</html>

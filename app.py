@@ -10,6 +10,7 @@ import secrets
 
 from werkzeug.utils import secure_filename
 import datetime
+from datetime import timedelta
 import re
 import csv
 # Google Drive API imports
@@ -35,6 +36,12 @@ ALLOWED_MUSIC_EXTENSIONS   = {"mp3", "wav", "m4a", "ogg", "mp4"}
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+
+app.permanent_session_lifetime = timedelta(minutes=10)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=True  # keep True on Fly (HTTPS)
 
 # ---------- Secrets: require in prod, friendly defaults in dev ----------
 IS_PROD = bool(os.getenv("FLY_APP_NAME"))
@@ -613,6 +620,7 @@ def _run_startup_tasks():
 
         finally:
             _startup_done = True
+#=======================================================================================================================================================================#
 
 @app.before_request
 def _startup_once():
@@ -621,10 +629,7 @@ def _startup_once():
         return
     if not _startup_done:
         _run_startup_tasks()
-        
-###################################################################################========== ROUTES ==========############################################################
-
-##############################################################################################################################################################
+#=======================================================================================================================================================================#
 
 # --- Public home + Admin SQL Query Tool (CRUD, multi-statement) ---
 def _list_user_tables():
@@ -639,8 +644,33 @@ def _list_user_tables():
              ORDER BY 1
         """)
         return [r[0] for r in cur.fetchall()]
+#=======================================================================================================================================================================#
 
-##############################################################################################################################################################
+# --- Admin inactivity guard: auto-logout after 10 minutes of inactivity ---
+import time
+from flask import request, redirect, url_for, flash, session
+
+@app.before_request
+def enforce_admin_idle_timeout():
+    safe_endpoints = {'login', 'healthz', 'static'}
+
+    if session.get('admin'):
+        now = int(time.time())
+        last = session.get('last_seen', now)
+        idle = now - last
+
+        if idle > 10 * 60:
+            flash("You were logged out for security reasons. Please, log in again to edit!")
+            session.pop('admin', None)
+            session.pop('last_seen', None)
+            if request.endpoint not in safe_endpoints:
+                return redirect(url_for('login'))
+        else:
+            session['last_seen'] = now
+
+        
+###################################################################################========== ROUTES ==========############################################################
+###########################################################################################################################################################################
 
 # Public home used by multiple templates (and health check lands here )
 @app.route("/", methods=["GET"])
@@ -753,7 +783,6 @@ def query_sql():
         error_msg=error_msg,
         needs_confirm=needs_confirm,
     )
-
 ##############################################################################################################################################################
 
 # Admin only rescanning for duplicates and re-importing
@@ -788,24 +817,33 @@ def rescan_uploads():
     
 ##############################################################################################################################################################
 
-# -- Admin login/logout --
+IDLE_TIMEOUT_SECONDS = 10 * 60  # 10 minutes
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        if request.form['password'] == ADMIN_PASSWORD:
+        pw = (request.form.get('password') or '').strip()
+        if pw == ADMIN_PASSWORD:
+            # mark session as admin and start idle timer
             session['admin'] = True
+            session['last_seen'] = int(time.time())
+            session.permanent = True  # respects app.permanent_session_lifetime if you set it
             flash("Logged in as admin.")
             return redirect(url_for('public_home'))
         else:
             flash("Incorrect password.")
+            return redirect(url_for('login'))
+    # GET
     return render_template('login.html')
+##############################################################################################################################################################
 
 @app.route('/logout')
 def logout():
+    # clear admin markers
     session.pop('admin', None)
+    session.pop('last_seen', None)
     flash("Logged out.")
     return redirect(url_for('public_home'))
-
 ##############################################################################################################################################################
 
 # --- Admin Dashboard (history-only) ---
