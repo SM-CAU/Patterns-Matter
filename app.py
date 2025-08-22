@@ -1060,8 +1060,7 @@ def property_detail(property_name, tab):
                         conn.commit()
                     upload_message = f"Linked folder: imported {imported} item(s)."
 
-            # 3) Upload a ZIP → push contents to Drive <root>/<property>/<tab> → import--Right now I am not using this due to not having a shared drive in google workspace.
-            # When I do use workspace, this Zip branch must be further refined such that it becomes deterministic on computed parent folder.
+            # 3) Upload a ZIP → push contents to Drive <root>/<property>/<tab> → import
             elif request.form.get('zip_upload'):
                 if 'zipfile' not in request.files or request.files['zipfile'].filename == '':
                     upload_message = "No ZIP file selected."
@@ -1073,6 +1072,10 @@ def property_detail(property_name, tab):
                             raise RuntimeError("GDRIVE_ROOT_FOLDER_ID not set.")
                         service = get_drive_service()
                         target_folder_id = drive_ensure_property_tab_folder(service, root_id, property_name, tab)
+
+                        # Hard guard so we never upload into Drive 'root'
+                        if not target_folder_id or target_folder_id in ("root", "", None):
+                            raise RuntimeError("Refusing to upload: invalid Drive parent (would create in root).")
 
                         data = zf.read()
                         z = zipfile.ZipFile(io.BytesIO(data))
@@ -1146,9 +1149,16 @@ def property_detail(property_name, tab):
                             (new_desc, property_name, tab, row_filename),
                         )
                     conn.commit()
+                # AJAX? return JSON so the page doesn't reload
+                if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                    return jsonify({"ok": True, "filename": row_filename})
+                # Non-AJAX fallback
                 edit_message = f"Updated info for {row_filename}."
 
         except Exception as e:
+            # AJAX error?
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({"ok": False, "error": str(e)}), 400
             upload_message = f"Error: {e}"
 
     # ---- fetch current uploads (Drive-only for property pages) ----
