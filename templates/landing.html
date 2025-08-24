@@ -1,116 +1,93 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Patterns Matter: Welcome</title>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
-    <style>
-        .admin-footer-links {
-            width: 100%;
-            display: flex;
-            justify-content: space-between;
-            margin-top: 2em;
-        }
-        .search-form {
-            margin: 2em 0;
-            text-align: center;
-        }
-        .search-form input[type="text"] {
-            padding: 0.5em;
-            width: 320px;
-            font-size: 1.05em;
-        }
-        .search-form button {
-            padding: 0.5em 1.3em;
-            font-size: 1.05em;
-            border-radius: 5px;
-            border: none;
-            background: #2a6;
-            color: #fff;
-            margin-left: 0.5em;
-        }
-        .search-form button:hover { background: #225c44; }
-        .desc {
-            text-align: justify;
-            text-justify: inter-word;
-            font-size: 1.0em;
-            margin-bottom: 2em;
-        }
-        .section {
-            margin-top: 2.3em;
-            margin-bottom: 1.5em;
-        }
-        h1 {
-            color: #f08903;
-            font-size: 2.6em;
-            margin-bottom: 0.7em;
-        }
-        h2 {
-            color: #ffaa18;
-            font-size: 1.45em;
-            margin-bottom: 0.5em;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="admin-link" style="text-align: right; margin-bottom: 1em;">
-            {% if session.admin %}
-                <a href="{{ url_for('logout') }}">Logout</a>
-            {% else %}
-                <a href="{{ url_for('login') }}">Admin Login</a>
-            {% endif %}
-        </div>
-        
-        <!-- SEARCH BAR -->
-        <form action="{{ url_for('search') }}" method="get" class="search-form">
-            <input type="text" name="q" placeholder="Search datasets or clips..." required>
-            <button type="submit">Search</button>
-        </form>
+{% extends "base.html" %}
 
-        <h1>Welcome to Patterns-Matter</h1>
-        <div class="desc">
-            <p>
-                <b>Patterns Matter</b> is a personal toy database of the author <b>(Sayeed)</b>. This database highlights author's quest for <b>patterns</b>. Patterns are encoded in and portrayed by the mother nature, more generally, the universe itself. The author quests for the patterns in <b>Materials</b> and <b>Music</b>.
-            </p>
-            <p>
-                Explore <b>materials datasets</b> revealing how a specific materials property is encoded in materials Structure and/or composition via machine learning, or enjoy <b>original guitar and music clips</b> composed by the author or tributes/covers. This database can be helpful to someone with a similar goal, as this database can provide data before and after of the featurization of the as-scrapped data. The download option for the dataset was activated merely for playing with RDBMS, not to be credited to me. My featurization data may help to set a base for the users' featurization process. The music displayed here is just for fun, nothing commercial. Redistribution is ok, but not using in your composition.
-            </p>
-        </div>
-        <div class="section">
-            <h2>What you'll find here:</h2>
-            <ul>
-                <li>
-                    <b>Materials Database:</b> Materials Datasets based on properties (e.g., band gap, formation energy, oxidation states, melting points etc.) and more — curated for reproducibility and open research. Every dataset will include list of materials filtered by properties, which can readily be used for machine learning purpose. More information concerning the implementation can be found in author's github.
-                </li>
-                <li>
-                    <b>Music & Guitar Clips:</b> Here you can find a preview of selected performances and recordings, downloadable for inspiration or personal listening. The whole composition can be availed upon request. 
-                </li>
-            </ul>
-        </div>
-        <hr>
-        <div class="section">
-            <h2>Explore:</h2>
-            <div class="explore-links">
-                <a href="{{ url_for('materials_portal') }}">Materials Database</a>
-                <a href="{{ url_for('public_clips') }}">Music & Guitar Clips</a>
-            </div>
-        </div>
-        <hr>
-        <div>
-            <small>For questions or collaborations: <b>sayeed.shahriar@gmail.com</b></small>
-        </div>
-        
-        <!-- Admin-only bottom links -->
-        {% if session.admin %}
-            <div class="admin-footer-links">
-                <div>
-                    <a href="{{ url_for('admin_home') }}">Admin Dashboard</a>
-                </div>
-                <div>
-                    <a href="{{ url_for('query_sql') }}">SQL Query Tool</a>
-                </div>
-            </div>
-        {% endif %}
+{% block title %}Patterns Matter: Welcome{% endblock %}
+{% set page_title = "Patterns Matter — Welcome" %}
+{% set page_description = "Explore materials datasets and music clips; Drive-backed content with a simple Flask frontend." %}
+
+{% block head_extra %}
+<style>
+  .admin-footer-links{width:100%;display:flex;justify-content:space-between;margin-top:2em}
+  .search-form{margin:2em 0;text-align:center}
+  .search-form input[type="text"]{padding:.5em;width:320px;font-size:1.05em}
+  .search-form button{padding:.5em 1.3em;font-size:1.05em;border-radius:5px;border:none;background:#2a6;color:#fff;margin-left:.5em}
+  .search-form button:hover{background:#225c44}
+  .desc{text-align:justify;text-justify:inter-word;font-size:1em;margin-bottom:2em}
+  .section{margin-top:2.3em;margin-bottom:1.5em}
+  h1{color:#f08903;font-size:2.6em;margin-bottom:.7em}
+  h2{color:#ffaa18;font-size:1.45em;margin-bottom:.5em}
+  .explore-links{display:flex;gap:1rem;flex-wrap:wrap}
+  .explore-links a{display:inline-block;background:#2a6;color:#fff;border-radius:6px;padding:.6em 1.2em;text-decoration:none;font-weight:bold}
+  .explore-links a:hover{background:#225c44}
+  .admin-link{ text-align:right; margin-bottom:1em; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+
+  <!-- Admin Login/Logout -->
+  <div class="admin-link">
+    {% if session.admin %}
+      <a href="{{ url_for('logout') }}">Logout</a>
+    {% else %}
+      <a href="{{ url_for('login') }}">Admin Login</a>
+    {% endif %}
+  </div>
+
+  <!-- Search -->
+  <form action="{{ url_for('search') }}" method="get" class="search-form">
+    <input type="text" name="q" placeholder="Search datasets or clips..." required>
+    <button type="submit">Search</button>
+  </form>
+
+  <h1>Welcome to Patterns-Matter</h1>
+
+  <div class="desc">
+    <p>
+      <b>Patterns Matter</b> is a personal toy database of the author <b>(Sayeed)</b>. This database highlights the quest for
+      <b>patterns</b>—in <b>Materials</b> and in <b>Music</b>.
+    </p>
+    <p>
+      Explore <b>materials datasets</b> (pre/post-featurization) and enjoy <b>original guitar/music clips</b>. Downloads are provided to
+      play with RDBMS tooling; please credit the original sources for raw data. Music here is for fun, non-commercial; redistribution
+      is okay, but don’t reuse in your own compositions.
+    </p>
+  </div>
+
+  <div class="section">
+    <h2>What you'll find here:</h2>
+    <ul>
+      <li>
+        <b>Materials Database:</b> Property-centric datasets (band gap, formation energy, oxidation state, melting point, …) curated for
+        reproducibility. Many are ML-ready. Implementation details live on the author’s GitHub.
+      </li>
+      <li>
+        <b>Music & Guitar Clips:</b> Selected performances/recordings you can preview and download for inspiration or personal listening.
+      </li>
+    </ul>
+  </div>
+
+  <hr>
+
+  <div class="section">
+    <h2>Explore:</h2>
+    <div class="explore-links">
+      <a href="{{ url_for('materials_portal') }}">Materials Database</a>
+      <a href="{{ url_for('public_clips') }}">Music & Guitar Clips</a>
     </div>
-</body>
-</html>
+  </div>
+
+  <hr>
+
+  <div>
+    <small>For questions or collaborations: <b>sayeed.shahriar@gmail.com</b></small>
+  </div>
+
+  {% if session.admin %}
+    <div class="admin-footer-links">
+      <div><a href="{{ url_for('admin_home') }}">Admin Dashboard</a></div>
+      <div><a href="{{ url_for('query_sql') }}">SQL Query Tool</a></div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

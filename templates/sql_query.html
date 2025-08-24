@@ -1,97 +1,92 @@
-<!DOCTYPE html> 
-<html>
-<head>
-    <title>SQL Query Tool | Patterns Matter</title>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
-    <style>
-        .return-home {
-            display: inline-block;
-            background: #2a6;
-            color: #fff;
-            border-radius: 6px;
-            padding: 0.6em 1.7em;
-            text-decoration: none;
-            font-weight: bold;
-            margin-bottom: 1em;
-        }
-        .return-home:hover { background: #225c44; }
-        .warn-box {
-            margin-top: .75em; padding: .75em;
-            border: 1px solid #c93; background: #fff8e5; border-radius: 6px;
-        }
-        .warn-box label { cursor: pointer; }
-        textarea { width: 90%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <!-- Top row: Return Home (left) and Login/Logout (right) -->
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <a class="return-home" href="{{ url_for('public_home') }}">Return to Home</a>
-            <div class="admin-link" style="text-align: right;">
-                {% if session.admin %}
-                    <a href="{{ url_for('logout') }}">Logout</a>
-                {% else %}
-                    <a href="{{ url_for('login') }}">Admin Login</a>
-                {% endif %}
-            </div>
-        </div>
+{% extends "base.html" %}
 
-        <h1>SQL Query Tool</h1>
-        <div>
-            <a href="{{ url_for('admin_home') }}">Back to Dashboard</a>
-        </div>
-        <hr>
-        <h2>Available Tables:</h2>
-        <ul>
-            {% for t in tables %}
-                <li><code>{{ t }}</code></li>
-            {% endfor %}
-        </ul>
+{% block title %}SQL Query Tool | Patterns Matter{% endblock %}
+{% set page_title = "SQL Query Tool" %}
+{% set page_description = "Run read/write SQL against the Patterns Matter SQLite database (admin only)." %}
 
-        <form method="post" id="sql-form">
-            <label for="sql">Enter SQL (supports multiple statements separated by “;”):</label><br>
-            <textarea id="sql" name="sql" rows="10" required>{{ sql }}</textarea>
+{% block content %}
+<div class="container">
+  <!-- Top row: Return Home (left) and Login/Logout (right) -->
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <a class="return-home" href="{{ url_for('public_home') }}">Return to Home</a>
+    <div class="admin-link" style="text-align:right;">
+      {% if session.admin %}
+        <a href="{{ url_for('logout') }}">Logout</a>
+      {% else %}
+        <a href="{{ url_for('login') }}">Admin Login</a>
+      {% endif %}
+    </div>
+  </div>
 
-            <!-- Destructive confirmation (server-driven + client hint) -->
-            <div id="confirm-wrap" class="warn-box" style="display: {{ 'block' if needs_confirm else 'none' }};">
-                <input type="checkbox" id="confirm" name="confirm">
-                <label for="confirm"><b>Are you sure?</b> Your query includes
-                    <code>DROP</code>/<code>DELETE</code>/<code>UPDATE</code>/<code>ALTER</code>/<code>TRUNCATE</code>.
-                </label>
-            </div>
+  <h1>SQL Query Tool</h1>
+  <div>
+    <a href="{{ url_for('admin_home') }}">Back to Dashboard</a>
+  </div>
+  <hr>
 
-            <div style="margin-top: .8em;">
-                <button type="submit">Run</button>
-            </div>
-        </form>
+  <style>
+    .return-home {
+      display:inline-block; background:#2a6; color:#fff; border-radius:6px;
+      padding:.6em 1.7em; text-decoration:none; font-weight:bold; margin-bottom:1em;
+    }
+    .return-home:hover { background:#225c44; }
+    .warn-box { margin-top:.75em; padding:.75em; border:1px solid #c93; background:#fff8e5; border-radius:6px; }
+    .warn-box label { cursor:pointer; }
+    textarea { width:90%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    code { background: #00000022; padding: 0 .25em; border-radius: 4px; }
+  </style>
 
-        {% if result_html %}
-            <h2>Result:</h2>
-            {{ result_html|safe }}
-        {% endif %}
-        {% if error_msg %}
-            <h3 style="color:#a00;">Notice:</h3>
-            <pre style="white-space: pre-wrap;">{{ error_msg }}</pre>
-        {% endif %}
+  <h2>Available Tables:</h2>
+  <ul>
+    {% for t in tables %}
+      <li><code>{{ t }}</code></li>
+    {% endfor %}
+  </ul>
+
+  <form method="post" id="sql-form">
+    <label for="sql">Enter SQL (supports multiple statements separated by “;”):</label><br>
+    <textarea id="sql" name="sql" rows="10" required>{{ sql }}</textarea>
+
+    <!-- Destructive confirmation (server-driven + client hint) -->
+    <div id="confirm-wrap" class="warn-box" style="display: {{ 'block' if needs_confirm else 'none' }};">
+      <input type="checkbox" id="confirm" name="confirm">
+      <label for="confirm">
+        <b>Are you sure?</b> Your query includes
+        <code>DROP</code>/<code>DELETE</code>/<code>UPDATE</code>/<code>ALTER</code>/<code>TRUNCATE</code>.
+      </label>
     </div>
 
-    <script>
-    // Client-side helper: show confirm box if destructive terms detected.
-    (function(){
-        var ta = document.getElementById('sql');
-        var wrap = document.getElementById('confirm-wrap');
-        var re = /\b(drop|delete|update|alter|truncate)\b/i;
+    <div style="margin-top:.8em;">
+      <button type="submit">Run</button>
+    </div>
+  </form>
 
-        function update() {
-            try {
-                var s = ta.value.replace(/--.*?$/mg, "").replace(/\/\*[\s\S]*?\*\//g, "");
-                wrap.style.display = re.test(s) ? 'block' : ({{ 'true' if needs_confirm else 'false' }}) ? 'block' : 'none';
-            } catch (_) {}
-        }
-        ta && ta.addEventListener('input', update);
-        update();
-    })();
-    </script>
-</body>
-</html>
+  {% if result_html %}
+    <h2>Result:</h2>
+    {{ result_html|safe }}
+  {% endif %}
+  {% if error_msg %}
+    <h3 style="color:#a00;">Notice:</h3>
+    <pre style="white-space: pre-wrap;">{{ error_msg }}</pre>
+  {% endif %}
+</div>
+
+<script>
+// Client-side helper: show confirm box if destructive terms detected.
+(function(){
+  var ta = document.getElementById('sql');
+  var wrap = document.getElementById('confirm-wrap');
+  var serverNeedsConfirm = {{ 'true' if needs_confirm else 'false' }};
+  var re = /\b(drop|delete|update|alter|truncate)\b/i;
+
+  function update() {
+    try {
+      var s = ta.value.replace(/--.*?$/mg, "").replace(/\/\*[\s\S]*?\*\//g, "");
+      wrap.style.display = (re.test(s) || serverNeedsConfirm) ? 'block' : 'none';
+    } catch (_) {}
+  }
+  ta && ta.addEventListener('input', update);
+  update();
+})();
+</script>
+{% endblock %}

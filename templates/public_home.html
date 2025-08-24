@@ -1,37 +1,37 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Patterns Matter Data Portal</title>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-    <div class="container">
-        <!-- Consistent Admin Login/Logout button -->
-        <div class="admin-link" style="text-align: right; margin-bottom: 1em;">
-            {% if session.admin %}
-                <a href="{{ url_for('logout') }}">Logout</a>
-            {% else %}
-                <a href="{{ url_for('login') }}">Admin Login</a>
-            {% endif %}
-        </div>
+{% extends "base.html" %}
 
-        <h1>Patterns Matter: Public Data Portal</h1>
-        <h2>Available Datasets</h2>
-        {% if tables %}
-            <ul>
-            {% for table in tables %}
-                <li>
-                    <b>{{ table }}</b>
-                    &nbsp; <a href="{{ url_for('public_view', table=table) }}">[View]</a>
-                    &nbsp; <a href="{{ url_for('download', table=table) }}">[Download CSV]</a>
-                </li>
-            {% endfor %}
-            </ul>
-        {% else %}
-            <p>No datasets available yet.</p>
-        {% endif %}
-        <hr>
-        <p>Contact: sayeed.shahriar@gmail.com </p>
-    </div>
-</body>
-</html>
+{% block title %}Patterns Matter Data Portal{% endblock %}
+{% set page_title = "Patterns Matter Data Portal" %}
+
+{% block content %}
+<div class="container">
+  <!-- Admin Login/Logout -->
+  <div class="admin-link" style="text-align:right; margin-bottom:1em;">
+    {% if session.admin %}
+      <a href="{{ url_for('logout') }}">Logout</a>
+    {% else %}
+      <a href="{{ url_for('login') }}">Admin Login</a>
+    {% endif %}
+  </div>
+
+  <h1>Patterns Matter: Public Data Portal</h1>
+
+  <h2>Available Datasets</h2>
+  {% if tables and tables|length %}
+    <ul>
+      {% for table in tables %}
+        <li>
+          <b>{{ table }}</b>
+          &nbsp; <a href="{{ url_for('public_view', table=table) }}">[View]</a>
+          &nbsp; <a href="{{ url_for('download', table=table) }}">[Download CSV]</a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>No datasets available yet.</p>
+  {% endif %}
+
+  <hr>
+  <p>Contact: <a href="mailto:sayeed.shahriar@gmail.com">sayeed.shahriar@gmail.com</a></p>
+</div>
+{% endblock %}

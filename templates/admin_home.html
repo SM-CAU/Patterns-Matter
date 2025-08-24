@@ -1,47 +1,63 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Admin Dashboard | Patterns Matter</title>
-  <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
-  <style>
-    .return-home{display:inline-block;background:#2a6;color:#fff;border-radius:6px;padding:.6em 1.7em;text-decoration:none;font-weight:bold;margin-bottom:1em}
-    .return-home:hover{background:#225c44}
-    table.audit{border-collapse:collapse;width:100%;margin-top:1em}
-    table.audit th, table.audit td{border:1px solid #444;padding:.7em 1.1em;text-align:left}
-    table.audit th{background:#282;color:#fff}
-    .pill{display:inline-block;padding:.2em .6em;border-radius:12px;font-weight:bold}
-    .pill.present{background:#204f2a;color:#caffda}
-    .pill.absent{background:#5a1e1e;color:#ffd6d6}
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div style="display:flex;justify-content:space-between;align-items:center;">
-      <a class="return-home" href="{{ url_for('public_home') }}">Return to Home</a>
-      <div class="admin-link" style="text-align:right;">
-        {% if session.admin %}<a href="{{ url_for('logout') }}">Logout</a>{% else %}<a href="{{ url_for('login') }}">Admin Login</a>{% endif %}
-      </div>
-    </div>
+{% extends "base.html" %}
 
-    <h1>Admin Dashboard</h1>
-    {% if audit_rows and audit_rows|length %}
-      <table class="audit">
-        <tr><th>File_name</th><th>Uploaded at</th><th>Public_View_Status</th></tr>
-        {% for file_name, uploaded_at, status in audit_rows %}
-        <tr>
-          <td>{{ file_name }}</td>
-          <td>{{ uploaded_at }}</td>
-          <td>{% if status=='Present' %}<span class="pill present">Present</span>{% else %}<span class="pill absent">Absent</span>{% endif %}</td>
-        </tr>
-        {% endfor %}
-      </table>
-    {% else %}
-      <p>No history yet.</p>
-    {% endif %}
+{% block title %}Admin Dashboard | Patterns Matter{% endblock %}
+{% set page_title = "Admin Dashboard — Patterns Matter" %}
+{% set page_description = "History of uploads and current public availability." %}
 
-    <div style="margin-top:1.5em;">
-      <a href="{{ url_for('query_sql') }}">SQL Query Tool</a>
+{% block head_extra %}
+<style>
+  .return-home {
+    display:inline-block;background:#2a6;color:#fff;border-radius:6px;
+    padding:.6em 1.7em;text-decoration:none;font-weight:bold;margin-bottom:1em
+  }
+  .return-home:hover{background:#225c44}
+  table.audit{border-collapse:collapse;width:100%;margin-top:1em}
+  table.audit th, table.audit td{border:1px solid #444;padding:.7em 1.1em;text-align:left}
+  table.audit th{background:#282;color:#fff}
+  .pill{display:inline-block;padding:.2em .6em;border-radius:12px;font-weight:bold}
+  .pill.present{background:#204f2a;color:#caffda}
+  .pill.absent{background:#5a1e1e;color:#ffd6d6}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <a class="return-home" href="{{ url_for('public_home') }}">Return to Home</a>
+    <div class="admin-link" style="text-align:right;">
+      {% if session.admin %}
+        <a href="{{ url_for('logout') }}">Logout</a>
+      {% else %}
+        <a href="{{ url_for('login') }}">Admin Login</a>
+      {% endif %}
     </div>
   </div>
-</body>
-</html>
+
+  <h1>Admin Dashboard</h1>
+
+  {% if audit_rows and audit_rows|length %}
+    <table class="audit">
+      <tr><th>File_name</th><th>Uploaded at</th><th>Public_View_Status</th></tr>
+      {% for file_name, uploaded_at, status in audit_rows %}
+      <tr>
+        <td>{{ file_name }}</td>
+        <td>{{ uploaded_at }}</td>
+        <td>
+          {% if status=='Present' %}
+            <span class="pill present">Present</span>
+          {% else %}
+            <span class="pill absent">Absent</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p>No history yet.</p>
+  {% endif %}
+
+  <div style="margin-top:1.5em;">
+    <a href="{{ url_for('query_sql') }}">SQL Query Tool</a>
+  </div>
+</div>
+{% endblock %}

@@ -1,77 +1,83 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Add Drive Clip | Patterns Matter</title>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
-    <style>
-        body {
-            font-family: sans-serif;
-            color: #f1f1f1;
-            background: #1e1e1e;
-        }
-        .container {
-            max-width: 600px;
-            margin: 3em auto;
-            background: #2d2d2d;
-            padding: 2em;
-            border-radius: 12px;
-            box-shadow: 0 2px 10px #0005;
-        }
-        label {
-            font-weight: bold;
-            display: block;
-            margin-top: 1.2em;
-        }
-        input[type="text"] {
-            width: 100%;
-            padding: 0.6em;
-            border-radius: 6px;
-            border: 1px solid #888;
-            background: #111;
-            color: #fff;
-        }
-        button {
-            margin-top: 1.5em;
-            padding: 0.6em 2em;
-            background: #2a6;
-            color: #fff;
-            border: none;
-            font-weight: bold;
-            border-radius: 6px;
-            cursor: pointer;
-        }
-        button:hover {
-            background: #225c44;
-        }
-        .msg {
-            margin-top: 1.5em;
-            font-weight: bold;
-            color: #ffc;
-        }
-        a { color: #6af; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h2>Add Google Drive Clip</h2>
-        <form method="post">
-            <label>Title:</label>
-            <input type="text" name="title" required>
+{% extends "base.html" %}
 
-            <label>Description:</label>
-            <input type="text" name="description">
+{% block title %}Add Drive Clip | Patterns Matter{% endblock %}
+{% set page_title = "Add Google Drive Clip — Patterns Matter" %}
+{% set page_description = "Add a music/guitar clip by linking a Google Drive share URL." %}
 
-            <label>Google Drive Share Link:</label>
-            <input type="text" name="link" placeholder="https://drive.google.com/..." required>
+{% block head_extra %}
+<style>
+  .add-clip-container {
+    max-width: 600px;
+    margin: 3em auto;
+    background: #2d2d2d;
+    padding: 2em;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px #0005;
+  }
+  .add-clip-container label {
+    font-weight: bold;
+    display: block;
+    margin-top: 1.2em;
+  }
+  .add-clip-container input[type="text"] {
+    width: 100%;
+    padding: 0.6em;
+    border-radius: 6px;
+    border: 1px solid #888;
+    background: #111;
+    color: #fff;
+  }
+  .add-clip-container button {
+    margin-top: 1.5em;
+    padding: 0.6em 2em;
+    background: #2a6;
+    color: #fff;
+    border: none;
+    font-weight: bold;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .add-clip-container button:hover { background: #225c44; }
+  .add-clip-container .msg { margin-top: 1.5em; font-weight: bold; color: #ffc; }
+  .admin-link a { color: #fff; text-decoration: none; margin-left: 1em; font-weight: bold; }
+  .admin-link a:hover { text-decoration: underline; }
+</style>
+{% endblock %}
 
-            <button type="submit">Add Clip</button>
-        </form>
+{% block content %}
+<div class="container">
+  <!-- Admin Login/Logout -->
+  <div class="admin-link" style="text-align: right; margin-bottom: 1em;">
+    {% if session.admin %}
+      <a href="{{ url_for('logout') }}">Logout</a>
+    {% else %}
+      <a href="{{ url_for('login') }}">Admin Login</a>
+    {% endif %}
+  </div>
 
-        {% if message %}
-            <div class="msg">{{ message }}</div>
-        {% endif %}
+  <div class="add-clip-container">
+    <h2>Add Google Drive Clip</h2>
 
-        <p style="margin-top:2em;"><a href="{{ url_for('public_clips') }}">← Back to Clips</a></p>
-    </div>
-</body>
-</html>
+    <form method="post">
+      <label>Title:</label>
+      <input type="text" name="title" required>
+
+      <label>Description:</label>
+      <input type="text" name="description">
+
+      <label>Google Drive Share Link:</label>
+      <input type="text" name="link" placeholder="https://drive.google.com/..." required>
+
+      <button type="submit">Add Clip</button>
+    </form>
+
+    {% if message %}
+      <div class="msg">{{ message }}</div>
+    {% endif %}
+
+    <p style="margin-top:2em;">
+      <a href="{{ url_for('public_clips') }}">← Back to Clips</a>
+    </p>
+  </div>
+</div>
+{% endblock %}

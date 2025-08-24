@@ -1,19 +1,39 @@
-<!doctype html>
-<html>
-<head>
-    <title>View Result File</title>
-</head>
-<body>
-    <h2>Viewing: {{ filename }}</h2>
+{% extends "base.html" %}
 
-    {% if ext in ['png', 'jpg', 'jpeg', 'gif'] %}
-        <img src="{{ url_for('uploaded_file', filename=property_name + '/' + tab + '/' + filename) }}" style="max-width:100%;">
-    {% elif ext == 'pdf' %}
-        <iframe src="{{ url_for('uploaded_file', filename=property_name + '/' + tab + '/' + filename) }}" width="100%" height="600px"></iframe>
-    {% else %}
-        <p>Preview not supported. <a href="{{ url_for('uploaded_file', filename=property_name + '/' + tab + '/' + filename) }}">Download file</a></p>
-    {% endif %}
+{% block title %}View Result: {{ filename }} | Patterns Matter{% endblock %}
+{% set page_title = "View Result" %}
+{% set page_description = "Preview or download a result file." %}
 
-    <p><a href="{{ url_for('property_detail', property_name=property_name, tab=tab) }}">Back</a></p>
-</body>
-</html>
+{% block content %}
+<div class="container">
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <h2 style="margin:0;">Viewing: {{ filename }}</h2>
+    <div class="admin-link" style="text-align:right;">
+      {% if session.admin %}
+        <a href="{{ url_for('logout') }}">Logout</a>
+      {% else %}
+        <a href="{{ url_for('login') }}">Admin Login</a>
+      {% endif %}
+    </div>
+  </div>
+  <hr>
+
+  {# Prefer a fully-qualified file_url if the route passed one (e.g., Drive download/preview).
+     Otherwise fall back to the local uploads route. #}
+  {% set fallback_url = url_for('uploaded_file', filename=property_name ~ '/' ~ tab ~ '/' ~ filename) %}
+  {% set href = file_url|default(fallback_url, true) %}
+
+  {% if ext in ['png', 'jpg', 'jpeg', 'gif'] %}
+    <img src="{{ href }}" alt="{{ filename }}" style="max-width:100%; height:auto; display:block;">
+  {% elif ext == 'pdf' %}
+    <iframe src="{{ href }}" width="100%" height="720" style="border:0;"></iframe>
+  {% else %}
+    <p>Preview not supported.</p>
+    <p><a href="{{ href }}" target="_blank" rel="noopener">Download file</a></p>
+  {% endif %}
+
+  <p style="margin-top:1.2em;">
+    <a class="return-home" href="{{ url_for('property_detail', property_name=property_name, tab=tab) }}">Back</a>
+  </p>
+</div>
+{% endblock %}

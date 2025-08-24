@@ -7,6 +7,8 @@ import pandas as pd
 import numpy as np
 import sqlite3
 import secrets
+import time
+
 
 from werkzeug.utils import secure_filename
 import datetime
@@ -38,13 +40,14 @@ app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
 app.permanent_session_lifetime = timedelta(minutes=10)
+IS_PROD = bool(os.getenv("FLY_APP_NAME"))
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=True  # keep True on Fly (HTTPS)
+    SESSION_COOKIE_SECURE=IS_PROD,
+    )
 
 # ---------- Secrets: require in prod, friendly defaults in dev ----------
-IS_PROD = bool(os.getenv("FLY_APP_NAME"))
 
 def _require_env(name: str) -> str:
     val = os.getenv(name)
@@ -66,7 +69,7 @@ else:
 GDRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
-# ---------- Utility Functions ----------
+# -------------------------- ----------------Utility Functions ---------------------------------------------------------------------------------------------------------------------
 
 def allowed_dataset_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_DATASET_EXTENSIONS
@@ -631,35 +634,14 @@ def _startup_once():
         _run_startup_tasks()
 #=======================================================================================================================================================================#
 
-# --- Public home + Admin SQL Query Tool (CRUD, multi-statement) ---
-def _list_user_tables():
-    """List non-internal SQLite tables for display in the SQL tool and home page."""
-    with sqlite3.connect(DB_NAME) as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT name
-              FROM sqlite_master
-             WHERE type='table'
-               AND name NOT LIKE 'sqlite_%'
-             ORDER BY 1
-        """)
-        return [r[0] for r in cur.fetchall()]
-#=======================================================================================================================================================================#
-
 # --- Admin inactivity guard: auto-logout after 10 minutes of inactivity ---
-import time
-from flask import request, redirect, url_for, flash, session
-
 @app.before_request
 def enforce_admin_idle_timeout():
     safe_endpoints = {'login', 'healthz', 'static'}
-
     if session.get('admin'):
-        now = int(time.time())
+        now  = int(time.time())
         last = session.get('last_seen', now)
-        idle = now - last
-
-        if idle > 10 * 60:
+        if (now - last) > IDLE_TIMEOUT_SECONDS:
             flash("You were logged out for security reasons. Please, log in again to edit!")
             session.pop('admin', None)
             session.pop('last_seen', None)
@@ -1429,8 +1411,11 @@ def public_view(table):
 
 @app.route('/download/<table>')
 def download(table):
+    # allow only simple identifiers and quote it
+    if not re.match(r'^[A-Za-z0-9_]+$', table or ''):
+        abort(404)
     with sqlite3.connect(DB_NAME) as conn:
-        df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
+        df = pd.read_sql_query(f'SELECT * FROM "{table}"', conn)
     csv_path = os.path.join(UPLOAD_FOLDER, f"{table}.csv")
     df.to_csv(csv_path, index=False)
     return send_from_directory(UPLOAD_FOLDER, f"{table}.csv", as_attachment=True)
