@@ -24,7 +24,7 @@ It renders datasets and result artifacts *directly from Google Drive* (service a
 
 ## 2) Key Takeaways (Learner Perspective)
 
-You touched almost every layer of a modern web service. Here’s a recap by technology and the concrete techniques used.
+I tried to  touch almost every layer of a modern web service. Here’s a recap by technology and the concrete techniques used.
 
 ### HTML / CSS / Jinja (Templating)
 - **HTML structure**: semantic tags (`<table>`, `<form>`, `<input>`, `<a>`, `<button>`) and responsive wrappers.
@@ -34,8 +34,9 @@ You touched almost every layer of a modern web service. Here’s a recap by tech
   - Template variables from Flask: `render_template("view.html", uploads=uploads, admin=is_admin, ...)`.
   - URL building: `url_for('property_detail', property_name=p, tab='results')` – avoids hardcoding links.
   - Defensive rendering: `row.get('storage', 'local')`, `COALESCE()` at SQL-layer to keep templates robust.
+- performing CRUD using SQL with my sql_query tool.
 
-**Mental Model:** Jinja renders **server-side**. You pass Python objects, Jinja turns them into HTML. Keep logic light in templates; do data prep in views.
+**Mental Model:** Jinja renders **server-side**. I pass Python objects, Jinja turns them into HTML. Keep logic light in templates; do data prep in views.
 
 ---
 
