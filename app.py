@@ -1521,40 +1521,38 @@ def delete_clip(clip_id):
     return redirect(url_for('public_clips'))
 ##############################################################################################################################################################
 
-# DELETE DATASET/RESULT FILE
-from urllib.parse import unquote
-
 @app.route('/delete_dataset_file/<property_name>/<tab>/<path:filename>', methods=['POST'])
 def delete_dataset_file(property_name, tab, filename):
     if not session.get('admin'):
         return redirect(url_for('login'))
 
-    # Build and validate the target path
-    uploads_root = current_app.config.get("UPLOAD_FOLDER", UPLOAD_FOLDER)
-    base_dir = os.path.join(uploads_root, property_name, tab)
-    safe_name = secure_filename(os.path.basename(filename))
-    target_path = os.path.realpath(os.path.join(base_dir, safe_name))
-    base_dir_real = os.path.realpath(base_dir)
-    if not (target_path == base_dir_real or target_path.startswith(base_dir_real + os.sep)):
-        abort(400, description="Invalid file path")
-
-    # Remove file if present
+    # 1) Remove local file if it exists (we rarely use this now, but harmless)
     try:
-        if os.path.isfile(target_path):
+        uploads_root = current_app.config.get("UPLOAD_FOLDER", UPLOAD_FOLDER)
+        base_dir = os.path.join(uploads_root, property_name, tab)
+        # Only sanitize for the filesystem path:
+        safe_fs_name = secure_filename(os.path.basename(filename))
+        target_path = os.path.realpath(os.path.join(base_dir, safe_fs_name))
+        base_dir_real = os.path.realpath(base_dir)
+        if target_path.startswith(base_dir_real + os.sep) and os.path.isfile(target_path):
             os.remove(target_path)
     except Exception as e:
-        print(f"File delete warning: {e}")
+        current_app.logger.warning("File delete warning for %s: %s", filename, e)
 
-    # Remove exactly one row by composite key
+    # 2) Delete the catalog row by the *original* filename exactly
     with sqlite3.connect(DB_NAME) as conn:
         c = conn.cursor()
         c.execute(
             "DELETE FROM uploads_log WHERE property=? AND tab=? AND filename=?",
-            (property_name, tab, safe_name)
+            (property_name, tab, filename)   # <- original, NOT secure_filename
         )
         conn.commit()
 
+    # Optional: flash a message (you’re already showing flashes site-wide)
+    flash(f"Deleted entry: {filename}")
+
     return redirect(url_for('property_detail', property_name=property_name, tab=tab))
+
 ##############################################################################################################################################################
 
 @app.route('/add_drive_clip', methods=['GET', 'POST'])
